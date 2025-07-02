@@ -1404,6 +1404,3 @@ ggarrange(alpha_plot, beta_plot, )
 
 ```
 
-
-#look into relationship between secondary forest and village distance
-#Near villages you have a mix between secondary and primary forest species
