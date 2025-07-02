@@ -1,0 +1,1409 @@
+---
+title: "Diversity Calculations"
+output: html_document
+date: "2023-11-28"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r Load Packages and Data}
+#devtools::install_github("jinyizju/V.PhyloMaker")
+#devtools::install_github("GabrielNakamura/Dimensionality_package")
+#BiocManager::install("ggtree")
+library(tidyverse);library(adespatial);library(vegan);library(ggplot2);library(ggpubr);library(V.PhyloMaker);library(BIOMASS);library(picante);library(ape);library(BiocManager);library(Dimensionality);library(ggtree);library(adiv);library(MuMIn);library(ggfortify);library(scales);library(factoextra)
+
+tdat <- read.csv("~/Documents/GitHub/FaunalDegradationAGBNew/Data/tdat_frug2_diversity.csv")
+metadata <- read.csv("~/Documents/GitHub/FaunalDegradationAGB/Data/model-data.csv")
+frug_tree <- read.tree("~/Documents/Projects/GabonAGB_NSF/frug_tree") #phylogenetic tree
+animal_taxa <- read.csv("~/Documents/GitHub/GabonDiversity/Data/animal_taxa.csv")
+frug_dat_total <- read.csv("~/Documents/Projects/GabonAGB_NSF/frug_dat_total2.csv")
+tdat$Genus[tdat$Genus=="Obletiana"] <- "Obletia"
+tdat$Genus[tdat$Genus=="Syzyguim"] <- "Syzygium"
+tdat$Genus[tdat$Genus=="Pschotria"] <- "Psychotria"
+tdat$Genus[tdat$Genus=="Terminialia"] <- "Terminalia"
+tdat$Genus[tdat$Genus=="Dacroydes"] <- "Dacryodes"
+
+tdat <- tdat %>% filter(DispoCode != "NRI_P140", DispoCode !="NRI_P171", DispoCode != "NRI_P066", DispoCode !="NRI_P092", DispoCode != "OLAM_P030", DispoCode !="NRI_P164", DispoCode !="OLAM_P027", DispoCode !="NRI_P072") #remove plots with very poor species identification
+
+
+```
+
+```{r Metadata cleaning}
+
+metadata_soil <- metadata %>% select(T_BULK_DEN, S_BULK_DEN, T_CEC_CLAY, S_CEC_CLAY, T_CLAY, S_CLAY:S_OC)
+
+soil_pca <- princomp(metadata_soil)
+
+summary(soil_pca)
+
+ind<-get_pca_ind(soil_pca)
+
+metadata$SoilPCA <- ind$coord[,1]
+metadata$SoilPCA <- scale(metadata$SoilPCA)
+
+tdat2 <- tdat %>% filter(Genus != "Na")
+(nrow(tdat)-nrow(tdat2))/nrow(tdat) 
+
+
+metadata3 <- metadata %>% select(Temp, Prec, Latitude, SoilPCA, VillDist) %>% summarise(
+  Temp = mean(Temp), Prec = mean(Prec), Latitude = mean(Latitude), SoilPCA = mean(SoilPCA), VillDist = mean(VillDist)
+)
+
+metadata <- metadata[metadata$DispoCode %in% tdat$DispoCode,]
+metadata$Elephant[metadata$Elephant=="Ancienne piste/pas d'activite"] <- "1"
+metadata$Elephant[metadata$Elephant=="Active"] <- "1"
+metadata$Elephant[metadata$Elephant=="Pas d'indice"] <- "0"
+
+metadata_og <- metadata
+
+metadata$VillDist <- scale(metadata$VillDist)
+metadata$Temp <- scale(metadata$Temp)
+metadata$Prec <- scale(metadata$Prec)
+metadata$Latitude <- scale(metadata$Latitude)
+metadata$T_OC <- scale(metadata$T_OC)
+metadata$T_CEC_CLAY <- scale(metadata$T_CEC_CLAY)
+metadata$Elev <- scale(metadata$Elev)
+
+
+```
+
+```{r Calculate Interaction Diversity}
+richness_list <- as.list(NULL)
+alpha_list <- as.list(NULL)
+beta_list <- as.list(NULL)
+prop_list <- as.list(NULL)
+n_list <- as.list(NULL)
+ape_list <- as.list(NULL)
+ape_prop_list <- as.list(NULL)
+bat_list <- as.list(NULL)
+bat_prop_list <- as.list(NULL)
+bird_list <- as.list(NULL)
+bird_prop_list <- as.list(NULL)
+bush_list <- as.list(NULL)
+bush_prop_list <- as.list(NULL)
+carnivore_list <- as.list(NULL)
+carnivore_prop_list <- as.list(NULL)
+elephant_list <- as.list(NULL)
+elephant_prop_list <- as.list(NULL)
+monkey_list <- as.list(NULL)
+monkey_prop_list <- as.list(NULL)
+rodent_list <- as.list(NULL)
+rodent_prop_list <- as.list(NULL)
+suidae_list <- as.list(NULL)
+suidae_prop_list <- as.list(NULL)
+ungulate_list <- as.list(NULL)
+ungulate_prop_list <- as.list(NULL)
+
+for(i in 1:25){
+
+tdat_interaction <- tdat2 %>% select(X,DispoCode, Genus, Agapornis_swindernianus:Zosterops_senegalensis) %>% pivot_longer(names_to = "Animal", values_to = "InteractionProbability", cols = Agapornis_swindernianus:Zosterops_senegalensis)
+
+tdat_interaction$InteractionProbability <- rbinom(nrow(tdat_interaction), 1 , tdat_interaction$InteractionProbability) #draw from probability distribution
+  
+tdat_interaction2 <- tdat_interaction %>% filter(InteractionProbability ==1) %>% unite("Interaction", Genus:Animal, sep="_")
+
+#Richness
+div_values_interaction <- tdat_interaction2 %>%select(DispoCode, Interaction) %>%group_by(DispoCode) %>% summarise(richness = length(unique(Interaction))) 
+
+#Alpha Diversity
+tdat3_interaction <- tdat_interaction2%>% group_by(DispoCode, Interaction) %>% summarise(InteractionProbability = sum(InteractionProbability)) %>% pivot_wider(names_from = Interaction, values_from = InteractionProbability)
+tdat3_interaction[is.na(tdat3_interaction)]<-0
+tdat3_interaction<- as.data.frame(tdat3_interaction)
+rownames(tdat3_interaction)<- tdat3_interaction$DispoCode
+tdat3_interaction <- tdat3_interaction[,-1]
+diversity_values_interaction <- vegan::diversity(tdat3_interaction)#calculate alpha diversity values
+div_values_interaction$alpha <- diversity_values_interaction
+
+#Beta Diversity
+beta_div_interaction <- beta.div(tdat3_interaction, "hellinger", nperm=1000) #calculate beta diversity
+beta_values_interaction <- beta_div_interaction$LCBD# calculate local contributions to beta diversity
+div_values_interaction$beta <- beta_values_interaction
+
+#Proportion of trees with frugivore interaction
+
+prop_dat2 <- left_join(tdat_interaction, animal_taxa[,c(2,4)], by = "Animal") %>% dplyr::select(DispoCode, InteractionProbability, Taxa,X) %>% group_by(DispoCode, X, Taxa) %>% summarise(Interaction = sum(InteractionProbability)) %>% pivot_wider(names_from = Taxa, values_from = Interaction) %>% dplyr::select(-X)
+prop_dat2 <- prop_dat2[,-1]
+prop_dat2$Ape[prop_dat2$Ape>0]<-1
+prop_dat2$Bat[prop_dat2$Bat>0]<-1
+prop_dat2$Bird[prop_dat2$Bird>0]<-1
+prop_dat2$BushBaby[prop_dat2$BushBaby>0]<-1
+prop_dat2$Carnivore[prop_dat2$Carnivore>0]<-1
+prop_dat2$Elephant[prop_dat2$Elephant>0]<-1
+prop_dat2$Monkey[prop_dat2$Monkey>0]<-1
+prop_dat2$Rodent[prop_dat2$Rodent>0]<-1
+prop_dat2$Suidae[prop_dat2$Suidae>0] <- 1
+prop_dat2$Ungulate[prop_dat2$Ungulate>0]<-1
+prop_dat2$Total <- prop_dat2$Ape + prop_dat2$Bat +prop_dat2$Bird +prop_dat2$BushBaby + prop_dat2$Carnivore +prop_dat2$Elephant +prop_dat2$Monkey +prop_dat2$Rodent+prop_dat2$Suidae+prop_dat2$Ungulate
+prop_dat2$Total[prop_dat2$Total>0] <- 1
+
+prop_dat3 <- prop_dat2 %>% group_by(DispoCode) %>% summarise(Abundance = n(),
+                                                             Ape = sum(Ape),
+                                                             Bat = sum(Bat),
+                                                             Bird = sum(Bird),
+                                                             BushBaby = sum(BushBaby),
+                                                             Carnivore= sum(Carnivore),
+                                                             Elephant = sum(Elephant),
+                                                             Monkey = sum(Monkey),
+                                                             Rodent = sum(Rodent),
+                                                             Suidae = sum(Suidae),
+                                                             Ungulate = sum(Ungulate),
+                                                             NDisp = sum(Total),
+                                                             ApeProp = Ape/Abundance,
+                                                             BatProp = Bat/Abundance,
+                                                            BirdProp = Bird/Abundance,
+                                                             BushBabyProp = BushBaby/Abundance,
+                                                             CarnivoreProp = Carnivore/Abundance,
+                                                             ElephantProp = Elephant/Abundance,
+                                                             MonkeyProp = Monkey/Abundance,
+                                                             RodentProp = Rodent/Abundance,
+                                                             SuidaeProp = Suidae/Abundance,
+                                                             UngulateProp = Ungulate/Abundance,
+                                                             Prop_disp = NDisp/Abundance)
+
+richness_list[[i]] <- div_values_interaction$richness
+alpha_list[[i]] <- div_values_interaction$alpha
+beta_list[[i]] <- div_values_interaction$beta
+prop_list[[i]] <- prop_dat3$Prop_disp
+n_list[[i]] <- prop_dat3$NDisp
+ape_list[[i]] <- prop_dat3$Ape
+ape_prop_list[[i]] <- prop_dat3$ApeProp
+bat_list[[i]] <- prop_dat3$Bat
+bat_prop_list[[i]] <- prop_dat3$BatProp
+bird_list[[i]] <- prop_dat3$Bird
+bird_prop_list[[i]] <- prop_dat3$BirdProp
+bush_list[[i]] <- prop_dat3$BushBaby
+bush_prop_list[[i]] <- prop_dat3$BushBabyProp
+carnivore_list[[i]] <- prop_dat3$Carnivore
+carnivore_prop_list[[i]] <- prop_dat3$CarnivoreProp
+elephant_list[[i]] <- prop_dat3$Elephant
+elephant_prop_list[[i]] <- prop_dat3$ElephantProp
+monkey_list[[i]] <- prop_dat3$Monkey
+monkey_prop_list[[i]] <- prop_dat3$MonkeyProp
+rodent_list[[i]] <- prop_dat3$Rodent
+rodent_prop_list[[i]] <- prop_dat3$RodentProp
+suidae_list[[i]] <- prop_dat3$Suidae
+suidae_prop_list[[i]] <- prop_dat3$SuidaeProp
+ungulate_list[[i]] <- prop_dat3$Ungulate
+ungulate_prop_list[[i]] <- prop_dat3$UngulateProp
+
+}
+
+interaction_draws <- data.frame(rep(div_values_interaction$DispoCode, 25), unlist(richness_list), unlist(alpha_list), unlist(beta_list), unlist(prop_list), unlist(n_list),
+        unlist(ape_list),unlist(bat_list), unlist(bird_list), unlist(bush_list), unlist(carnivore_list), unlist(elephant_list), unlist(monkey_list), unlist(rodent_list), unlist(suidae_list),unlist(ungulate_list),
+        unlist(ape_prop_list),unlist(bat_prop_list), unlist(bird_prop_list), unlist(bush_prop_list), unlist(carnivore_prop_list), unlist(elephant_prop_list), unlist(monkey_prop_list), unlist(rodent_prop_list), unlist(suidae_prop_list), unlist(ungulate_prop_list))
+
+colnames(interaction_draws) <- c("DispoCode", "richness", "alpha", "beta", "prop", "n", "ape", "bat", "bird", "bush", "carnivore", "elephant", "monkey", "rodent", "suidae", "ungulate",
+                                 "ape_prop", "bat_prop", "bird_prop", "bush_prop", "carnivore_prop", "elephant_prop", "monkey_prop", "rodent_prop", "suidae_prop", "ungulate_prop")
+
+write.csv(interaction_draws, "interaction_draws.csv")
+
+
+```
+
+```{r Calculate Interaction Diversity}
+richness_list2 <- as.list(NULL)
+alpha_list2 <- as.list(NULL)
+beta_list2 <- as.list(NULL)
+prop_list2 <- as.list(NULL)
+n_list2 <- as.list(NULL)
+ape_list2 <- as.list(NULL)
+ape_prop_list2 <- as.list(NULL)
+bat_list2 <- as.list(NULL)
+bat_prop_list2 <- as.list(NULL)
+bird_list2 <- as.list(NULL)
+bird_prop_list2 <- as.list(NULL)
+bush_list2 <- as.list(NULL)
+bush_prop_list2 <- as.list(NULL)
+carnivore_list2 <- as.list(NULL)
+carnivore_prop_list2 <- as.list(NULL)
+elephant_list2 <- as.list(NULL)
+elephant_prop_list2 <- as.list(NULL)
+monkey_list2 <- as.list(NULL)
+monkey_prop_list2 <- as.list(NULL)
+rodent_list2 <- as.list(NULL)
+rodent_prop_list2 <- as.list(NULL)
+suidae_list2 <- as.list(NULL)
+suidae_prop_list2 <- as.list(NULL)
+ungulate_list2 <- as.list(NULL)
+ungulate_prop_list2 <- as.list(NULL)
+
+for(i in 1:25){
+
+tdat_interaction <- tdat2 %>% select(X,DispoCode, Genus, Agapornis_swindernianus:Zosterops_senegalensis) %>% pivot_longer(names_to = "Animal", values_to = "InteractionProbability", cols = Agapornis_swindernianus:Zosterops_senegalensis)
+
+tdat_interaction$InteractionProbability <- rbinom(nrow(tdat_interaction), 1 , tdat_interaction$InteractionProbability) #draw from probability distribution
+  
+tdat_interaction2 <- tdat_interaction %>% filter(InteractionProbability ==1) %>% unite("Interaction", Genus:Animal, sep="_")
+
+#Richness
+div_values_interaction <- tdat_interaction2 %>%select(DispoCode, Interaction) %>%group_by(DispoCode) %>% summarise(richness = length(unique(Interaction))) 
+
+#Alpha Diversity
+tdat3_interaction <- tdat_interaction2%>% group_by(DispoCode, Interaction) %>% summarise(InteractionProbability = sum(InteractionProbability)) %>% pivot_wider(names_from = Interaction, values_from = InteractionProbability)
+tdat3_interaction[is.na(tdat3_interaction)]<-0
+tdat3_interaction<- as.data.frame(tdat3_interaction)
+rownames(tdat3_interaction)<- tdat3_interaction$DispoCode
+tdat3_interaction <- tdat3_interaction[,-1]
+diversity_values_interaction <- vegan::diversity(tdat3_interaction)#calculate alpha diversity values
+div_values_interaction$alpha <- diversity_values_interaction
+
+#Beta Diversity
+beta_div_interaction <- beta.div(tdat3_interaction, "hellinger", nperm=1000) #calculate beta diversity
+beta_values_interaction <- beta_div_interaction$LCBD# calculate local contributions to beta diversity
+div_values_interaction$beta <- beta_values_interaction
+
+#Proportion of trees with frugivore interaction
+
+prop_dat2 <- left_join(tdat_interaction, animal_taxa[,c(2,4)], by = "Animal") %>% dplyr::select(DispoCode, InteractionProbability, Taxa,X) %>% group_by(DispoCode, X, Taxa) %>% summarise(Interaction = sum(InteractionProbability)) %>% pivot_wider(names_from = Taxa, values_from = Interaction) %>% dplyr::select(-X)
+prop_dat2 <- prop_dat2[,-1]
+prop_dat2$Ape[prop_dat2$Ape>0]<-1
+prop_dat2$Bat[prop_dat2$Bat>0]<-1
+prop_dat2$Bird[prop_dat2$Bird>0]<-1
+prop_dat2$BushBaby[prop_dat2$BushBaby>0]<-1
+prop_dat2$Carnivore[prop_dat2$Carnivore>0]<-1
+prop_dat2$Elephant[prop_dat2$Elephant>0]<-1
+prop_dat2$Monkey[prop_dat2$Monkey>0]<-1
+prop_dat2$Rodent[prop_dat2$Rodent>0]<-1
+prop_dat2$Suidae[prop_dat2$Suidae>0] <- 1
+prop_dat2$Ungulate[prop_dat2$Ungulate>0]<-1
+prop_dat2$Total <- prop_dat2$Ape + prop_dat2$Bat +prop_dat2$Bird +prop_dat2$BushBaby + prop_dat2$Carnivore +prop_dat2$Elephant +prop_dat2$Monkey +prop_dat2$Rodent+prop_dat2$Suidae+prop_dat2$Ungulate
+prop_dat2$Total[prop_dat2$Total>0] <- 1
+
+prop_dat3 <- prop_dat2 %>% group_by(DispoCode) %>% summarise(Abundance = n(),
+                                                             Ape = sum(Ape),
+                                                             Bat = sum(Bat),
+                                                             Bird = sum(Bird),
+                                                             BushBaby = sum(BushBaby),
+                                                             Carnivore= sum(Carnivore),
+                                                             Elephant = sum(Elephant),
+                                                             Monkey = sum(Monkey),
+                                                             Rodent = sum(Rodent),
+                                                             Suidae = sum(Suidae),
+                                                             Ungulate = sum(Ungulate),
+                                                             NDisp = sum(Total),
+                                                             ApeProp = Ape/Abundance,
+                                                             BatProp = Bat/Abundance,
+                                                            BirdProp = Bird/Abundance,
+                                                             BushBabyProp = BushBaby/Abundance,
+                                                             CarnivoreProp = Carnivore/Abundance,
+                                                             ElephantProp = Elephant/Abundance,
+                                                             MonkeyProp = Monkey/Abundance,
+                                                             RodentProp = Rodent/Abundance,
+                                                             SuidaeProp = Suidae/Abundance,
+                                                             UngulateProp = Ungulate/Abundance,
+                                                             Prop_disp = NDisp/Abundance)
+
+richness_list2[[i]] <- div_values_interaction$richness
+alpha_list2[[i]] <- div_values_interaction$alpha
+beta_list2[[i]] <- div_values_interaction$beta
+prop_list2[[i]] <- prop_dat3$Prop_disp
+n_list2[[i]] <- prop_dat3$NDisp
+ape_list2[[i]] <- prop_dat3$Ape
+ape_prop_list2[[i]] <- prop_dat3$ApeProp
+bat_list2[[i]] <- prop_dat3$Bat
+bat_prop_list2[[i]] <- prop_dat3$BatProp
+bird_list2[[i]] <- prop_dat3$Bird
+bird_prop_list2[[i]] <- prop_dat3$BirdProp
+bush_list2[[i]] <- prop_dat3$BushBaby
+bush_prop_list2[[i]] <- prop_dat3$BushBabyProp
+carnivore_list2[[i]] <- prop_dat3$Carnivore
+carnivore_prop_list2[[i]] <- prop_dat3$CarnivoreProp
+elephant_list2[[i]] <- prop_dat3$Elephant
+elephant_prop_list2[[i]] <- prop_dat3$ElephantProp
+monkey_list2[[i]] <- prop_dat3$Monkey
+monkey_prop_list2[[i]] <- prop_dat3$MonkeyProp
+rodent_list2[[i]] <- prop_dat3$Rodent
+rodent_prop_list2[[i]] <- prop_dat3$RodentProp
+suidae_list2[[i]] <- prop_dat3$Suidae
+suidae_prop_list2[[i]] <- prop_dat3$SuidaeProp
+ungulate_list2[[i]] <- prop_dat3$Ungulate
+ungulate_prop_list2[[i]] <- prop_dat3$UngulateProp
+
+}
+
+interaction_draws_b <- data.frame(rep(div_values_interaction$DispoCode, 25), unlist(richness_list2), unlist(alpha_list2), unlist(beta_list2), unlist(prop_list2), unlist(n_list2),
+        unlist(ape_list2),unlist(bat_list2), unlist(bird_list2), unlist(bush_list2), unlist(carnivore_list2), unlist(elephant_list2), unlist(monkey_list2), unlist(rodent_list2), unlist(suidae_list2),unlist(ungulate_list2),
+        unlist(ape_prop_list2),unlist(bat_prop_list2), unlist(bird_prop_list2), unlist(bush_prop_list2), unlist(carnivore_prop_list2), unlist(elephant_prop_list2), unlist(monkey_prop_list2), unlist(rodent_prop_list2), unlist(suidae_prop_list2), unlist(ungulate_prop_list2))
+
+colnames(interaction_draws_b) <- c("DispoCode", "richness", "alpha", "beta", "prop", "n", "ape", "bat", "bird", "bush", "carnivore", "elephant", "monkey", "rodent", "suidae", "ungulate",
+                                 "ape_prop", "bat_prop", "bird_prop", "bush_prop", "carnivore_prop", "elephant_prop", "monkey_prop", "rodent_prop", "suidae_prop", "ungulate_prop")
+
+
+write.csv(interaction_draws_b, "interaction_draws_b.csv")
+
+```
+
+```{r Calculate Interaction Diversity}
+richness_list3 <- as.list(NULL)
+alpha_list3 <- as.list(NULL)
+beta_list3 <- as.list(NULL)
+prop_list3 <- as.list(NULL)
+n_list3 <- as.list(NULL)
+ape_list3 <- as.list(NULL)
+ape_prop_list3 <- as.list(NULL)
+bat_list3 <- as.list(NULL)
+bat_prop_list3 <- as.list(NULL)
+bird_list3 <- as.list(NULL)
+bird_prop_list3 <- as.list(NULL)
+bush_list3 <- as.list(NULL)
+bush_prop_list3 <- as.list(NULL)
+carnivore_list3 <- as.list(NULL)
+carnivore_prop_list3 <- as.list(NULL)
+elephant_list3 <- as.list(NULL)
+elephant_prop_list3 <- as.list(NULL)
+monkey_list3 <- as.list(NULL)
+monkey_prop_list3 <- as.list(NULL)
+rodent_list3 <- as.list(NULL)
+rodent_prop_list3 <- as.list(NULL)
+suidae_list3 <- as.list(NULL)
+suidae_prop_list3 <- as.list(NULL)
+ungulate_list3 <- as.list(NULL)
+ungulate_prop_list3 <- as.list(NULL)
+
+for(i in 1:25){
+
+tdat_interaction <- tdat2 %>% select(X,DispoCode, Genus, Agapornis_swindernianus:Zosterops_senegalensis) %>% pivot_longer(names_to = "Animal", values_to = "InteractionProbability", cols = Agapornis_swindernianus:Zosterops_senegalensis)
+
+tdat_interaction$InteractionProbability <- rbinom(nrow(tdat_interaction), 1 , tdat_interaction$InteractionProbability) #draw from probability distribution
+  
+tdat_interaction2 <- tdat_interaction %>% filter(InteractionProbability ==1) %>% unite("Interaction", Genus:Animal, sep="_")
+
+#Richness
+div_values_interaction <- tdat_interaction2 %>%select(DispoCode, Interaction) %>%group_by(DispoCode) %>% summarise(richness = length(unique(Interaction))) 
+
+#Alpha Diversity
+tdat3_interaction <- tdat_interaction2%>% group_by(DispoCode, Interaction) %>% summarise(InteractionProbability = sum(InteractionProbability)) %>% pivot_wider(names_from = Interaction, values_from = InteractionProbability)
+tdat3_interaction[is.na(tdat3_interaction)]<-0
+tdat3_interaction<- as.data.frame(tdat3_interaction)
+rownames(tdat3_interaction)<- tdat3_interaction$DispoCode
+tdat3_interaction <- tdat3_interaction[,-1]
+diversity_values_interaction <- vegan::diversity(tdat3_interaction)#calculate alpha diversity values
+div_values_interaction$alpha <- diversity_values_interaction
+
+#Beta Diversity
+beta_div_interaction <- beta.div(tdat3_interaction, "hellinger", nperm=1000) #calculate beta diversity
+beta_values_interaction <- beta_div_interaction$LCBD# calculate local contributions to beta diversity
+div_values_interaction$beta <- beta_values_interaction
+
+#Proportion of trees with frugivore interaction
+
+prop_dat2 <- left_join(tdat_interaction, animal_taxa[,c(2,4)], by = "Animal") %>% dplyr::select(DispoCode, InteractionProbability, Taxa,X) %>% group_by(DispoCode, X, Taxa) %>% summarise(Interaction = sum(InteractionProbability)) %>% pivot_wider(names_from = Taxa, values_from = Interaction) %>% dplyr::select(-X)
+prop_dat2 <- prop_dat2[,-1]
+prop_dat2$Ape[prop_dat2$Ape>0]<-1
+prop_dat2$Bat[prop_dat2$Bat>0]<-1
+prop_dat2$Bird[prop_dat2$Bird>0]<-1
+prop_dat2$BushBaby[prop_dat2$BushBaby>0]<-1
+prop_dat2$Carnivore[prop_dat2$Carnivore>0]<-1
+prop_dat2$Elephant[prop_dat2$Elephant>0]<-1
+prop_dat2$Monkey[prop_dat2$Monkey>0]<-1
+prop_dat2$Rodent[prop_dat2$Rodent>0]<-1
+prop_dat2$Suidae[prop_dat2$Suidae>0] <- 1
+prop_dat2$Ungulate[prop_dat2$Ungulate>0]<-1
+prop_dat2$Total <- prop_dat2$Ape + prop_dat2$Bat +prop_dat2$Bird +prop_dat2$BushBaby + prop_dat2$Carnivore +prop_dat2$Elephant +prop_dat2$Monkey +prop_dat2$Rodent+prop_dat2$Suidae+prop_dat2$Ungulate
+prop_dat2$Total[prop_dat2$Total>0] <- 1
+
+prop_dat3 <- prop_dat2 %>% group_by(DispoCode) %>% summarise(Abundance = n(),
+                                                             Ape = sum(Ape),
+                                                             Bat = sum(Bat),
+                                                             Bird = sum(Bird),
+                                                             BushBaby = sum(BushBaby),
+                                                             Carnivore= sum(Carnivore),
+                                                             Elephant = sum(Elephant),
+                                                             Monkey = sum(Monkey),
+                                                             Rodent = sum(Rodent),
+                                                             Suidae = sum(Suidae),
+                                                             Ungulate = sum(Ungulate),
+                                                             NDisp = sum(Total),
+                                                             ApeProp = Ape/Abundance,
+                                                             BatProp = Bat/Abundance,
+                                                            BirdProp = Bird/Abundance,
+                                                             BushBabyProp = BushBaby/Abundance,
+                                                             CarnivoreProp = Carnivore/Abundance,
+                                                             ElephantProp = Elephant/Abundance,
+                                                             MonkeyProp = Monkey/Abundance,
+                                                             RodentProp = Rodent/Abundance,
+                                                             SuidaeProp = Suidae/Abundance,
+                                                             UngulateProp = Ungulate/Abundance,
+                                                             Prop_disp = NDisp/Abundance)
+
+richness_list3[[i]] <- div_values_interaction$richness
+alpha_list3[[i]] <- div_values_interaction$alpha
+beta_list3[[i]] <- div_values_interaction$beta
+prop_list3[[i]] <- prop_dat3$Prop_disp
+n_list3[[i]] <- prop_dat3$NDisp
+ape_list3[[i]] <- prop_dat3$Ape
+ape_prop_list3[[i]] <- prop_dat3$ApeProp
+bat_list3[[i]] <- prop_dat3$Bat
+bat_prop_list3[[i]] <- prop_dat3$BatProp
+bird_list3[[i]] <- prop_dat3$Bird
+bird_prop_list3[[i]] <- prop_dat3$BirdProp
+bush_list3[[i]] <- prop_dat3$BushBaby
+bush_prop_list3[[i]] <- prop_dat3$BushBabyProp
+carnivore_list3[[i]] <- prop_dat3$Carnivore
+carnivore_prop_list3[[i]] <- prop_dat3$CarnivoreProp
+elephant_list3[[i]] <- prop_dat3$Elephant
+elephant_prop_list3[[i]] <- prop_dat3$ElephantProp
+monkey_list3[[i]] <- prop_dat3$Monkey
+monkey_prop_list3[[i]] <- prop_dat3$MonkeyProp
+rodent_list3[[i]] <- prop_dat3$Rodent
+rodent_prop_list3[[i]] <- prop_dat3$RodentProp
+suidae_list3[[i]] <- prop_dat3$Suidae
+suidae_prop_list3[[i]] <- prop_dat3$SuidaeProp
+ungulate_list3[[i]] <- prop_dat3$Ungulate
+ungulate_prop_list3[[i]] <- prop_dat3$UngulateProp
+
+}
+
+interaction_draws_c <- data.frame(rep(div_values_interaction$DispoCode, 25), unlist(richness_list3), unlist(alpha_list3), unlist(beta_list3), unlist(prop_list3), unlist(n_list3),
+        unlist(ape_list3),unlist(bat_list3), unlist(bird_list3), unlist(bush_list3), unlist(carnivore_list3), unlist(elephant_list3), unlist(monkey_list3), unlist(rodent_list3), unlist(suidae_list3),unlist(ungulate_list3),
+        unlist(ape_prop_list3),unlist(bat_prop_list3), unlist(bird_prop_list3), unlist(bush_prop_list3), unlist(carnivore_prop_list3), unlist(elephant_prop_list3), unlist(monkey_prop_list3), unlist(rodent_prop_list3), unlist(suidae_prop_list3), unlist(ungulate_prop_list3))
+
+colnames(interaction_draws_c) <- c("DispoCode", "richness", "alpha", "beta", "prop", "n", "ape", "bat", "bird", "bush", "carnivore", "elephant", "monkey", "rodent", "suidae", "ungulate",
+                                 "ape_prop", "bat_prop", "bird_prop", "bush_prop", "carnivore_prop", "elephant_prop", "monkey_prop", "rodent_prop", "suidae_prop", "ungulate_prop")
+
+
+write.csv(interaction_draws_c, "interaction_draws_c.csv")
+
+```
+
+```{r Calculate Interaction Diversity}
+richness_list4 <- as.list(NULL)
+alpha_list4 <- as.list(NULL)
+beta_list4 <- as.list(NULL)
+prop_list4 <- as.list(NULL)
+n_list4 <- as.list(NULL)
+ape_list4 <- as.list(NULL)
+ape_prop_list4 <- as.list(NULL)
+bat_list4 <- as.list(NULL)
+bat_prop_list4 <- as.list(NULL)
+bird_list4 <- as.list(NULL)
+bird_prop_list4 <- as.list(NULL)
+bush_list4 <- as.list(NULL)
+bush_prop_list4 <- as.list(NULL)
+carnivore_list4 <- as.list(NULL)
+carnivore_prop_list4 <- as.list(NULL)
+elephant_list4 <- as.list(NULL)
+elephant_prop_list4 <- as.list(NULL)
+monkey_list4 <- as.list(NULL)
+monkey_prop_list4 <- as.list(NULL)
+rodent_list4 <- as.list(NULL)
+rodent_prop_list4 <- as.list(NULL)
+suidae_list4 <- as.list(NULL)
+suidae_prop_list4 <- as.list(NULL)
+ungulate_list4 <- as.list(NULL)
+ungulate_prop_list4 <- as.list(NULL)
+
+for(i in 1:25){
+
+tdat_interaction <- tdat2 %>% select(X,DispoCode, Genus, Agapornis_swindernianus:Zosterops_senegalensis) %>% pivot_longer(names_to = "Animal", values_to = "InteractionProbability", cols = Agapornis_swindernianus:Zosterops_senegalensis)
+
+tdat_interaction$InteractionProbability <- rbinom(nrow(tdat_interaction), 1 , tdat_interaction$InteractionProbability) #draw from probability distribution
+  
+tdat_interaction2 <- tdat_interaction %>% filter(InteractionProbability ==1) %>% unite("Interaction", Genus:Animal, sep="_")
+
+#Richness
+div_values_interaction <- tdat_interaction2 %>%select(DispoCode, Interaction) %>%group_by(DispoCode) %>% summarise(richness = length(unique(Interaction))) 
+
+#Alpha Diversity
+tdat3_interaction <- tdat_interaction2%>% group_by(DispoCode, Interaction) %>% summarise(InteractionProbability = sum(InteractionProbability)) %>% pivot_wider(names_from = Interaction, values_from = InteractionProbability)
+tdat3_interaction[is.na(tdat3_interaction)]<-0
+tdat3_interaction<- as.data.frame(tdat3_interaction)
+rownames(tdat3_interaction)<- tdat3_interaction$DispoCode
+tdat3_interaction <- tdat3_interaction[,-1]
+diversity_values_interaction <- vegan::diversity(tdat3_interaction)#calculate alpha diversity values
+div_values_interaction$alpha <- diversity_values_interaction
+
+#Beta Diversity
+beta_div_interaction <- beta.div(tdat3_interaction, "hellinger", nperm=1000) #calculate beta diversity
+beta_values_interaction <- beta_div_interaction$LCBD# calculate local contributions to beta diversity
+div_values_interaction$beta <- beta_values_interaction
+
+#Proportion of trees with frugivore interaction
+
+prop_dat2 <- left_join(tdat_interaction, animal_taxa[,c(2,4)], by = "Animal") %>% dplyr::select(DispoCode, InteractionProbability, Taxa,X) %>% group_by(DispoCode, X, Taxa) %>% summarise(Interaction = sum(InteractionProbability)) %>% pivot_wider(names_from = Taxa, values_from = Interaction) %>% dplyr::select(-X)
+prop_dat2 <- prop_dat2[,-1]
+prop_dat2$Ape[prop_dat2$Ape>0]<-1
+prop_dat2$Bat[prop_dat2$Bat>0]<-1
+prop_dat2$Bird[prop_dat2$Bird>0]<-1
+prop_dat2$BushBaby[prop_dat2$BushBaby>0]<-1
+prop_dat2$Carnivore[prop_dat2$Carnivore>0]<-1
+prop_dat2$Elephant[prop_dat2$Elephant>0]<-1
+prop_dat2$Monkey[prop_dat2$Monkey>0]<-1
+prop_dat2$Rodent[prop_dat2$Rodent>0]<-1
+prop_dat2$Suidae[prop_dat2$Suidae>0] <- 1
+prop_dat2$Ungulate[prop_dat2$Ungulate>0]<-1
+prop_dat2$Total <- prop_dat2$Ape + prop_dat2$Bat +prop_dat2$Bird +prop_dat2$BushBaby + prop_dat2$Carnivore +prop_dat2$Elephant +prop_dat2$Monkey +prop_dat2$Rodent+prop_dat2$Suidae+prop_dat2$Ungulate
+prop_dat2$Total[prop_dat2$Total>0] <- 1
+
+prop_dat3 <- prop_dat2 %>% group_by(DispoCode) %>% summarise(Abundance = n(),
+                                                             Ape = sum(Ape),
+                                                             Bat = sum(Bat),
+                                                             Bird = sum(Bird),
+                                                             BushBaby = sum(BushBaby),
+                                                             Carnivore= sum(Carnivore),
+                                                             Elephant = sum(Elephant),
+                                                             Monkey = sum(Monkey),
+                                                             Rodent = sum(Rodent),
+                                                             Suidae = sum(Suidae),
+                                                             Ungulate = sum(Ungulate),
+                                                             NDisp = sum(Total),
+                                                             ApeProp = Ape/Abundance,
+                                                             BatProp = Bat/Abundance,
+                                                            BirdProp = Bird/Abundance,
+                                                             BushBabyProp = BushBaby/Abundance,
+                                                             CarnivoreProp = Carnivore/Abundance,
+                                                             ElephantProp = Elephant/Abundance,
+                                                             MonkeyProp = Monkey/Abundance,
+                                                             RodentProp = Rodent/Abundance,
+                                                             SuidaeProp = Suidae/Abundance,
+                                                             UngulateProp = Ungulate/Abundance,
+                                                             Prop_disp = NDisp/Abundance)
+
+richness_list4[[i]] <- div_values_interaction$richness
+alpha_list4[[i]] <- div_values_interaction$alpha
+beta_list4[[i]] <- div_values_interaction$beta
+prop_list4[[i]] <- prop_dat3$Prop_disp
+n_list4[[i]] <- prop_dat3$NDisp
+ape_list4[[i]] <- prop_dat3$Ape
+ape_prop_list4[[i]] <- prop_dat3$ApeProp
+bat_list4[[i]] <- prop_dat3$Bat
+bat_prop_list4[[i]] <- prop_dat3$BatProp
+bird_list4[[i]] <- prop_dat3$Bird
+bird_prop_list4[[i]] <- prop_dat3$BirdProp
+bush_list4[[i]] <- prop_dat3$BushBaby
+bush_prop_list4[[i]] <- prop_dat3$BushBabyProp
+carnivore_list4[[i]] <- prop_dat3$Carnivore
+carnivore_prop_list4[[i]] <- prop_dat3$CarnivoreProp
+elephant_list4[[i]] <- prop_dat3$Elephant
+elephant_prop_list4[[i]] <- prop_dat3$ElephantProp
+monkey_list4[[i]] <- prop_dat3$Monkey
+monkey_prop_list4[[i]] <- prop_dat3$MonkeyProp
+rodent_list4[[i]] <- prop_dat3$Rodent
+rodent_prop_list4[[i]] <- prop_dat3$RodentProp
+suidae_list4[[i]] <- prop_dat3$Suidae
+suidae_prop_list4[[i]] <- prop_dat3$SuidaeProp
+ungulate_list4[[i]] <- prop_dat3$Ungulate
+ungulate_prop_list4[[i]] <- prop_dat3$UngulateProp
+
+}
+
+interaction_draws_d <- data.frame(rep(div_values_interaction$DispoCode, 25), unlist(richness_list4), unlist(alpha_list4), unlist(beta_list4), unlist(prop_list4), unlist(n_list4),
+        unlist(ape_list4),unlist(bat_list4), unlist(bird_list4), unlist(bush_list4), unlist(carnivore_list4), unlist(elephant_list4), unlist(monkey_list4), unlist(rodent_list4), unlist(suidae_list4),unlist(ungulate_list4),
+        unlist(ape_prop_list4),unlist(bat_prop_list4), unlist(bird_prop_list4), unlist(bush_prop_list4), unlist(carnivore_prop_list4), unlist(elephant_prop_list4), unlist(monkey_prop_list4), unlist(rodent_prop_list4), unlist(suidae_prop_list4), unlist(ungulate_prop_list4))
+
+colnames(interaction_draws_d) <- c("DispoCode", "richness", "alpha", "beta", "prop", "n", "ape", "bat", "bird", "bush", "carnivore", "elephant", "monkey", "rodent", "suidae", "ungulate",
+                                 "ape_prop", "bat_prop", "bird_prop", "bush_prop", "carnivore_prop", "elephant_prop", "monkey_prop", "rodent_prop", "suidae_prop", "ungulate_prop")
+
+interaction_draws_e <- rbind(interaction_draws, interaction_draws_b, interaction_draws_c, interaction_draws_d)
+
+write.csv(interaction_draws_d, "interaction_draws_d.csv")
+write.csv(interaction_draws_e, "interaction_draws_e.csv")
+
+```
+
+```{r Calculate Interaction Diversity}
+
+interaction_draws <- read.csv( "interaction_draws.csv")
+interaction_draws_b <- read.csv( "interaction_draws_b.csv")
+interaction_draws_c <- read.csv( "interaction_draws_c.csv")
+interaction_draws_d <- read.csv( "interaction_draws_d.csv")
+interaction_draws_e <- read.csv( "interaction_draws_e.csv")
+
+interaction_draws2 <- interaction_draws_e %>% group_by(DispoCode) %>% summarise(richness=mean(richness), alpha=mean(alpha), beta=mean(beta), proportion = mean(prop), n= mean(n),
+                                                                              ape=mean(ape), bat =mean(bat), bird=mean(bird), bush=mean(bush), carnivore=mean(carnivore), elephant=mean(elephant), monkey=mean(monkey), rodent=mean(rodent), suidae=mean(suidae),ungulate = mean(ungulate),
+                                                                              ape_prop=mean(ape_prop), bat_prop =mean(bat_prop), bird_prop=mean(bird_prop), bush_prop=mean(bush_prop), carnivore_prop=mean(carnivore_prop), elephant_prop=mean(elephant_prop), monkey_prop=mean(monkey_prop), rodent_prop=mean(rodent_prop), suidae_prop=mean(suidae_prop), ungulate_prop=mean(ungulate_prop))
+
+div_values_interaction <- interaction_draws2 
+
+
+calculate_mean_and_confidence_intervals <- function(proportions_list) {
+  # Create a list to store the results
+  results_list <- list()
+  
+  # Function to calculate 95% CI for a proportion using normal approximation
+  ci_normal_approx <- function(p, n, conf.level = 0.95) {
+    alpha <- 1 - conf.level
+    z <- qnorm(1 - alpha / 2)
+    se <- sqrt((p * (1 - p)) / n)
+    lower <- p - z * se
+    upper <- p + z * se
+    return(c(lower, upper))
+  }
+  
+  # Iterate through each list of proportions
+  for (j in 1:length(proportions_list)) {
+    proportions <- proportions_list[[j]]
+    
+    # Calculate the mean proportion
+    mean_proportion <- mean(proportions)
+    
+    # Assuming each proportion is out of 100 trials
+    n <- round(length(proportions) * 100,0)
+    
+    # Calculate the confidence interval for the mean proportion
+    ci <- ci_normal_approx(mean_proportion, n)
+    
+    # Store the results for the current list of proportions
+    results_list[[j]] <- data.frame(
+      List = j,
+      Mean_Proportion = mean_proportion,
+      CI_Lower = ci[1],
+      CI_Upper = ci[2]
+    )
+  }
+  
+  # Combine results into a single data frame
+  results_df <- do.call(rbind, results_list)
+  
+  return(results_df)
+}
+
+proportions_list <- list(div_values_interaction$proportion, div_values_interaction$ape_prop, div_values_interaction$bat_prop,
+                         div_values_interaction$bird_prop, div_values_interaction$bush_prop, div_values_interaction$carnivore_prop,
+                         div_values_interaction$elephant_prop,div_values_interaction$monkey_prop, div_values_interaction$rodent_prop,
+                         div_values_interaction$suidae_prop, div_values_interaction$ungulate_prop)
+
+results <- calculate_mean_and_confidence_intervals(proportions_list)
+
+results$Taxa <- c("Total", "Ape", "Bat", "Bird", "Bush Baby", "Carnivore", "Elephant", "Monkey", "Rodent", "Bush Pig", "Ungulate")
+
+results$Taxa <- factor(results$Taxa, levels = results$Taxa[order(results$Mean_Proportion, decreasing = FALSE)])
+
+
+#div_values_interaction2 <- interaction_draws2 %>% dplyr::select(proportion, ape_prop, bat_prop, bird_prop, bush_prop, carnivore_prop, elephant_prop, monkey_prop, rodent_prop, suidae_prop) %>% pivot_longer(names_to = "Type", values_to = "Proportion", cols = proportion:suidae_prop) %>% 
+
+mean(interaction_draws2$proportion)
+sd(interaction_draws2$proportion)
+
+interaction_draws3 <- interaction_draws2 %>% select(DispoCode, richness, alpha, beta, proportion, n) %>% summarise(richness = mean(richness), alpha = mean(alpha), beta = mean(beta), proportion = mean(proportion), n = mean(n))
+
+
+
+
+t.test(na.omit(metadata$abundance[metadata$Elephant=="1"]), na.omit(metadata$abundance[metadata$Elephant=="0"]))
+
+```
+
+```{r Proportion Figure}
+ 
+
+
+ggplot(data = results, aes(x = Taxa, y = Mean_Proportion))+
+geom_bar(stat = "identity", fill = "darkgreen", alpha=0.5) +
+  geom_errorbar(aes(ymin = CI_Lower, ymax = CI_Upper), width = 0.2, color="darkgreen") +
+  labs( x = "",
+       y = "Proportion Frugivore Trees") +
+  theme_classic()+
+  coord_flip()
+
+
+
+tdat_interaction3 <- tdat_interaction %>% select(Animal) %>% distinct()
+
+animal_taxa2 <- left_join(tdat_interaction3, animal_taxa, by ="Animal") %>% select(Animal, Taxa) %>% group_by(Taxa) %>% summarise(n=n())
+animal_taxa2$Taxa[animal_taxa2$Taxa=="BushBaby"] <- "Bush Baby"
+animal_taxa2$Taxa[animal_taxa2$Taxa=="Suidae"] <- "Bush Pig"
+
+results2 <- left_join(results, animal_taxa2, by = "Taxa")
+results2$n[results2$Taxa=="Total"] <- 153
+results2$SpeciesLevel <- results2$Mean_Proportion/ results2$n
+
+results2$Taxa <- factor(results2$Taxa, levels = results2$Taxa[order(results2$SpeciesLevel, decreasing = FALSE)])
+
+ggplot(data = results2, aes(x = Taxa, y = SpeciesLevel))+
+geom_bar(stat = "identity", fill = "darkgreen", alpha=0.5) +
+  labs( x = "",
+       y = "Proportion Frugivore Trees Per # Frugivore Taxa Per Species") +
+  theme_classic()+
+  coord_flip()
+
+results3 <- results2 
+results3$Mean_Proportion <- round(results3$Mean_Proportion, 3)
+results3$CI_Lower <- round(results3$CI_Lower, 3)
+results3$CI_Upper <- round(results3$CI_Upper, 3)
+results3$SpeciesLevel <- round(results3$SpeciesLevel, 3)
+
+write.csv(results3, "ProportionFrugivoreTree.csv")
+
+
+ 
+```
+
+```{r Interaction Diversity Models}
+div_meta_interaction <- left_join(div_values_interaction, metadata, by = "DispoCode") # add metadata
+div_meta_interaction <- div_meta_interaction[!is.na(div_meta_interaction$Elephant),] #remove plots that do not have values of elephant activity
+div_meta_interaction$Elephant[div_meta_interaction$Elephant=="Ancienne piste/pas d'activite"] <- "1"
+div_meta_interaction$Elephant[div_meta_interaction$Elephant=="Active"] <- "1"
+div_meta_interaction$Elephant[div_meta_interaction$Elephant=="Pas d'indice"] <- "0"
+div_meta_interaction$Succ2 <- factor(div_meta_interaction$Succ2, levels= c("Prm", "Sec", "Exp"))
+
+mean(div_meta_interaction$richness)
+sd(div_meta_interaction$richness)
+mean(div_meta_interaction$alpha)
+sd(div_meta_interaction$alpha)
+mean(div_meta_interaction$beta)
+sd(div_meta_interaction$beta)
+
+#Richness
+richness_mod_interaction <- lm(data = div_meta_interaction, richness ~Elephant +VillDist +Temp +Succ2+ Prec+Latitude+SoilPCA, na.action = na.fail) #build full model
+richness_mod2_interaction <- dredge(richness_mod_interaction) #select best model
+richness_mod3_interaction <- model.avg(richness_mod2_interaction, cumsum(weight) <= .95)
+richness_mod_summary_interaction <- summary(richness_mod3_interaction) 
+
+#Alpha Diversity
+alpha_mod_interaction <- lm(data = div_meta_interaction, alpha ~Elephant +VillDist +Temp +Succ2+ Prec+Latitude+SoilPCA, na.action = na.fail) #build full model
+alpha_mod2_interaction <- dredge(alpha_mod_interaction) #select best model
+alpha_mod3_interaction <- model.avg(alpha_mod2_interaction, cumsum(weight) <= .95)
+alpha_mod_summary_interaction <- summary(alpha_mod3_interaction) 
+
+#Beta Diversity
+beta_mod_interaction <- lm(data = div_meta_interaction, beta*1000 ~Elephant +VillDist +Temp +Succ2+ Prec+Latitude+SoilPCA, na.action = na.fail) #build full model
+beta_mod2_interaction <- dredge(beta_mod_interaction) #select best model
+beta_mod3_interaction <- model.avg(beta_mod2_interaction, cumsum(weight) <= .95)
+beta_mod_summary_interaction <- summary(beta_mod3_interaction) 
+
+#Proportion Dispersed Treed
+div_meta_interaction$n_round <- round(div_meta_interaction$n,0)
+div_meta_interaction$n_opp <- div_meta_interaction$abundance -div_meta_interaction$n_round 
+div_meta_interaction2 <- div_meta_interaction %>% select(n_round, n_opp,abundance, Elephant, VillDist, Temp, Succ2, Prec, Latitude, SoilPCA) %>% drop_na()
+
+proportion_mod_interaction <- glm(data = div_meta_interaction2, cbind(n_round, n_opp) ~Elephant +VillDist +Temp +Succ2+ Prec+Latitude+SoilPCA, na.action = na.fail, family = binomial) #build full model
+
+proportion_mod2_interaction <- dredge(proportion_mod_interaction) #select best model
+proportion_mod3_interaction <- model.avg(proportion_mod2_interaction, cumsum(weight) <= .95)
+proportion_mod_summary_interaction <- summary(proportion_mod3_interaction) 
+
+#Number Dispersed Trees
+n_mod_interaction <- lm(data = div_meta_interaction, n ~Elephant +VillDist +Temp +Succ2+ Prec+Latitude+SoilPCA, na.action = na.fail) #build full model
+n_mod2_interaction <- dredge(n_mod_interaction) #select best model
+n_mod3_interaction <- model.avg(n_mod2_interaction, cumsum(weight) <= .95)
+n_mod_summary_interaction <- summary(n_mod3_interaction) 
+
+#Parks 
+int_rich_park <- summary(lm(data = div_meta_interaction, richness ~as.factor(Park)))
+int_alpha_park <- summary(lm(data = div_meta_interaction, alpha ~as.factor(Park)))
+int_beta_park <- summary(lm(data = div_meta_interaction, beta ~as.factor(Park)))
+#Plots in parks do not hold disproportionate amounts of interaction diversity either
+
+
+t.test(div_meta_interaction$richness[div_meta_interaction$Park==1],div_meta_interaction$richness[div_meta_interaction$Park==0], alternative = "greater")
+
+t.test(div_meta_interaction$alpha[div_meta_interaction$Park==1],div_meta_interaction$alpha[div_meta_interaction$Park==0], alternative = "greater")
+
+t.test(div_meta_interaction$beta[div_meta_interaction$Park==1],div_meta_interaction$beta[div_meta_interaction$Park==0], alternative = "greater")
+
+t.test(div_meta_interaction$proportion[div_meta_interaction$Park==1],div_meta_interaction$proportion[div_meta_interaction$Park==0], alternative = "greater")
+
+t.test(div_meta_interaction$n[div_meta_interaction$Park==1],div_meta_interaction$n[div_meta_interaction$Park==0], alternative = "greater")
+
+```
+
+```{r Interaction Diversity Models (Variables Not Scaled)}
+
+metadata_og$VillDist <- metadata_og$VillDist/10
+metadata_og$Prec <- metadata_og$Prec/10
+
+div_meta_interaction_og <- left_join(div_values_interaction, metadata_og, by = "DispoCode") # add metadata
+div_meta_interaction_og <- div_meta_interaction_og[!is.na(div_meta_interaction_og$Elephant),] #remove plots that do not have values of elephant activity
+div_meta_interaction_og$Elephant[div_meta_interaction_og$Elephant=="Active"] <- "1"
+div_meta_interaction_og$Elephant[div_meta_interaction_og$Elephant=="Pas d'indice"] <- "0"
+div_meta_interaction_og$Succ2 <- factor(div_meta_interaction_og$Succ2, levels= c("Prm", "Sec", "Exp"))
+
+#Richness
+richness_mod_interaction_og <- lm(data = div_meta_interaction_og, richness ~Elephant +VillDist +Temp +Succ2+ Prec+Latitude+SoilPCA, na.action = na.fail) #build full model
+richness_mod2_interaction_og <- dredge(richness_mod_interaction_og) #select best model
+richness_mod3_interaction_og <- model.avg(richness_mod2_interaction_og, cumsum(weight) <= .95)
+richness_mod_summary_interaction_og <- summary(richness_mod3_interaction_og) 
+
+#Alpha Diversity
+alpha_mod_interaction_og <- lm(data = div_meta_interaction_og, alpha ~Elephant +VillDist +Temp +Succ2+ Prec+Latitude+SoilPCA, na.action = na.fail) #build full model
+alpha_mod2_interaction_og <- dredge(alpha_mod_interaction_og) #select best model
+alpha_mod3_interaction_og <- model.avg(alpha_mod2_interaction_og, cumsum(weight) <= .95)
+alpha_mod_summary_interaction_og <- summary(alpha_mod3_interaction_og) 
+
+#Beta Diversity
+beta_mod_interaction_og <- lm(data = div_meta_interaction_og, beta*1000 ~Elephant +VillDist +Temp +Succ2+ Prec+Latitude+SoilPCA, na.action = na.fail) #build full model
+beta_mod2_interaction_og <- dredge(beta_mod_interaction_og) #select best model
+beta_mod3_interaction_og <- model.avg(beta_mod2_interaction_og, cumsum(weight) <= .95)
+beta_mod_summary_interaction_og <- summary(beta_mod3_interaction_og) 
+
+#Proportion Dispersed Treed
+
+div_meta_interaction_og$n_round <- round(div_meta_interaction_og$n,0)
+div_meta_interaction_og$n_opp <- div_meta_interaction_og$abundance -div_meta_interaction_og$n_round 
+div_meta_interaction2_og <- div_meta_interaction_og %>% select(n_round, n_opp,abundance, Elephant, VillDist, Temp, Succ2, Prec, Latitude, SoilPCA) %>% drop_na()
+
+proportion_mod_interaction_og <- glm(data = div_meta_interaction2_og, cbind(n_round, n_opp) ~Elephant +VillDist +Temp +Succ2+ Prec+Latitude+SoilPCA, na.action = na.fail, family = binomial) #build full model
+
+proportion_mod2_interaction_og <- dredge(proportion_mod_interaction_og) #select best model
+proportion_mod3_interaction_og <- model.avg(proportion_mod2_interaction_og)
+proportion_mod_summary_interaction_og <- summary(proportion_mod3_interaction_og) 
+
+#Number Dispersed Treed
+n_mod_interaction_og <- lm(data = div_meta_interaction_og, n ~Elephant +VillDist +Temp +Succ2+ Prec+Latitude+SoilPCA, na.action = na.fail) #build full model
+n_mod2_interaction_og <- dredge(n_mod_interaction_og) #select best model
+n_mod3_interaction_og <- model.avg(n_mod2_interaction_og, cumsum(weight) <= .95)
+n_mod_summary_interaction_og <- summary(n_mod3_interaction_og) 
+
+
+```
+
+
+```{r Interaction Diversity Plots}
+
+richness_df_interaction <- as.data.frame(richness_mod_summary_interaction_og$coefmat.subset)
+richness_df_interaction$Variable <- rownames(richness_df_interaction)
+richness_df_interaction$Type <- "Richness"
+alpha_df_interaction <- as.data.frame(alpha_mod_summary_interaction_og$coefmat.subset)
+alpha_df_interaction$Variable <- rownames(alpha_df_interaction)
+alpha_df_interaction$Type <- "Alpha Diversity"
+beta_df_interaction <- as.data.frame(beta_mod_summary_interaction_og$coefmat.subset)
+beta_df_interaction$Variable <- rownames(beta_df_interaction)
+beta_df_interaction$Type <- "Beta Diversity"
+proportion_df_interaction <- as.data.frame(proportion_mod_summary_interaction_og$coefmat.subset)
+proportion_df_interaction$Variable <- rownames(proportion_df_interaction)
+proportion_df_interaction$Type <- "Proportion Dispersed"
+n_df_interaction <- as.data.frame(n_mod_summary_interaction_og$coefmat.subset)
+n_df_interaction$Variable <- rownames(n_df_interaction)
+n_df_interaction$Type <- "Abundance Dispersed"
+
+taxonomic_div_interaction <- rbind(richness_df_interaction, alpha_df_interaction, beta_df_interaction, proportion_df_interaction, n_df_interaction)
+taxonomic_div_interaction$Variable[taxonomic_div_interaction$Variable=="Elephant1"]<- "Ele. Act."
+taxonomic_div_interaction$Variable[taxonomic_div_interaction$Variable=="VillDist"]<- "Vill. Dist."
+taxonomic_div_interaction$Variable[taxonomic_div_interaction$Variable=="Elev"]<- "Elev."
+taxonomic_div_interaction$Variable[taxonomic_div_interaction$Variable=="Latitude"]<- "Lat."
+taxonomic_div_interaction$Variable[taxonomic_div_interaction$Variable=="Succ2Sec"]<- "Secondary"
+taxonomic_div_interaction$Variable[taxonomic_div_interaction$Variable=="Succ2Exp"]<- "Logged"
+taxonomic_div_interaction$Variable[taxonomic_div_interaction$Variable=="Temp"]<- "Temp."
+taxonomic_div_interaction$Variable[taxonomic_div_interaction$Variable=="Prec"]<- "Prec."
+taxonomic_div_interaction$Variable[taxonomic_div_interaction$Variable=="SoilPCA"]<- "Soil PCA"
+
+taxonomic_div_interaction$Lower <- taxonomic_div_interaction$Estimate - 1.96 * taxonomic_div_interaction$`Std. Error`
+taxonomic_div_interaction$Upper <- taxonomic_div_interaction$Estimate + 1.96 * taxonomic_div_interaction$`Std. Error`
+taxonomic_div_interaction$Lower90 <- taxonomic_div_interaction$Estimate - 1.644854 * taxonomic_div_interaction$`Std. Error`
+taxonomic_div_interaction$Upper90 <- taxonomic_div_interaction$Estimate + 1.644854 * taxonomic_div_interaction$`Std. Error`
+
+taxonomic_div_interaction <- taxonomic_div_interaction %>% filter(Variable != "(Intercept)")
+
+taxonomic_div_interaction$VarType <- taxonomic_div_interaction$Variable
+taxonomic_div_interaction$VarType[taxonomic_div_interaction$VarType=="Ele. Act."] <- "Environmental"
+taxonomic_div_interaction$VarType[taxonomic_div_interaction$VarType=="Lat."] <- "Environmental"
+taxonomic_div_interaction$VarType[taxonomic_div_interaction$VarType=="Elev."] <- "Environmental"
+taxonomic_div_interaction$VarType[taxonomic_div_interaction$VarType=="Temp."] <- "Environmental"
+taxonomic_div_interaction$VarType[taxonomic_div_interaction$VarType=="Prec."] <- "Environmental"
+taxonomic_div_interaction$VarType[taxonomic_div_interaction$VarType=="Soil PCA"] <- "Environmental"
+taxonomic_div_interaction$VarType[taxonomic_div_interaction$VarType=="Vill. Dist."] <- "Anthropogenic"
+taxonomic_div_interaction$VarType[taxonomic_div_interaction$VarType=="Logged"] <- "Anthropogenic"
+taxonomic_div_interaction$VarType[taxonomic_div_interaction$VarType=="Secondary"] <- "Anthropogenic"
+
+taxonomic_div_interaction$Variable <- factor(taxonomic_div_interaction$Variable, levels = c("Ele. Act.", "Temp.","Prec.", "Elev.", "Lat.", "Soil PCA", "Vill. Dist.", "Secondary", "Logged"))
+
+richness_plot_interaction <- ggplot(data=taxonomic_div_interaction[taxonomic_div_interaction$Type=="Richness",], aes(x= Variable, y= Estimate, ymin=Lower, ymax=Upper, color=VarType))+
+  geom_hline(yintercept = 0, linetype="dashed")+
+  geom_pointrange(position = position_dodge(0.5), size=0.7, lwd=0.7)+
+  geom_linerange(aes(x= Variable, y= Estimate, ymin=Lower90, ymax=Upper90), position = position_dodge(0.5), linewidth=1.5)+
+  theme_classic()+
+  ylab("Estimated Effect on Richness")+
+  theme(legend.position="bottom")+
+  scale_color_manual(values = c("gold", "darkblue"))+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))+
+  labs(color='Variable Type') 
+
+alpha_plot_interaction <- ggplot(data=taxonomic_div_interaction[taxonomic_div_interaction$Type=="Alpha Diversity",], aes(x= Variable, y= Estimate, ymin=Lower, ymax=Upper, color=VarType))+
+  geom_hline(yintercept = 0, linetype="dashed")+
+  geom_pointrange(position = position_dodge(0.5), size=0.7, lwd=0.7)+
+  geom_linerange(aes(x= Variable, y= Estimate, ymin=Lower90, ymax=Upper90), position = position_dodge(0.5), linewidth=1.5)+
+  theme_classic()+
+  ylab("Estimated Effect on alpha-Diversity")+
+  theme(legend.position="bottom")+
+  scale_color_manual(values = c("gold", "darkblue"))+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))+ theme(legend.position = "none")
+
+beta_plot_interaction <- ggplot(data=taxonomic_div_interaction[taxonomic_div_interaction$Type=="Beta Diversity",], aes(x= Variable, y= Estimate*1000, ymin=Lower*1000, ymax=Upper*1000, color=VarType))+
+  geom_hline(yintercept = 0, linetype="dashed")+
+  geom_pointrange(position = position_dodge(0.5), size=0.7, lwd=0.7)+
+  geom_linerange(aes(x= Variable, y= Estimate*1000, ymin=Lower90*1000, ymax=Upper90*1000), position = position_dodge(0.5), linewidth=1.5)+
+  theme_classic()+
+  ylab("Estimated Effect on beta-Diversity")+
+  theme(legend.position="bottom")+
+  scale_color_manual(values = c("gold", "darkblue"))+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))+ theme(legend.position = "none")
+
+proportion_plot_interaction <- ggplot(data=taxonomic_div_interaction[taxonomic_div_interaction$Type=="Proportion Dispersed",], aes(x= Variable, y= Estimate, ymin=Lower, ymax=Upper, color=VarType))+
+  geom_hline(yintercept = 0, linetype="dashed")+
+  geom_pointrange(position = position_dodge(0.5), size=0.7, lwd=0.7)+
+  geom_linerange(aes(x= Variable, y= Estimate, ymin=Lower90, ymax=Upper90), position = position_dodge(0.5), linewidth=1.5)+
+  theme_classic()+
+  ylab("Log-Odds of Frugivore Tree")+
+  theme(legend.position="bottom")+
+  scale_color_manual(values = c("gold", "darkblue"))+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))+
+  labs(color='Variable Type') 
+
+n_plot_interaction <- ggplot(data=taxonomic_div_interaction[taxonomic_div_interaction$Type=="Abundance Dispersed",], aes(x= Variable, y= Estimate, ymin=Lower, ymax=Upper, color=VarType))+
+  geom_hline(yintercept = 0, linetype="dashed")+
+  geom_pointrange(position = position_dodge(0.5), size=0.7, lwd=0.7)+
+  geom_linerange(aes(x= Variable, y= Estimate, ymin=Lower90, ymax=Upper90), position = position_dodge(0.5), linewidth=1.5)+
+  theme_classic()+
+  ylab("Estimated Effect on # Frugivore Trees")+
+  theme(legend.position="bottom")+
+  scale_color_manual(values = c("gold", "darkblue"))+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))+ theme(legend.position = "none")
+
+
+diversity_plot_interaction <- ggarrange(richness_plot_interaction, alpha_plot_interaction, beta_plot_interaction, labels = c("a", "b", "c"), nrow=3, common.legend = TRUE)
+plot_interaction <- ggarrange(proportion_plot_interaction, n_plot_interaction,labels = c("a", "b"), nrow=2, common.legend = TRUE)
+
+```
+
+```{r Calculate Taxonomic Diversity at Genus Level}
+
+tdat2 <- tdat %>% filter(Genus != "Na")
+(nrow(tdat)-nrow(tdat2))/nrow(tdat) 
+
+metadata$VillDist <- scale(metadata$VillDist)
+metadata$Temp <- scale(metadata$Temp)
+metadata$Prec <- scale(metadata$Prec)
+metadata$Latitude <- scale(metadata$Latitude)
+metadata$T_OC <- scale(metadata$T_OC)
+metadata$T_CEC_CLAY <- scale(metadata$T_CEC_CLAY)
+metadata$Elev <- scale(metadata$Elev)
+
+#Richness
+div_values <- tdat2 %>% group_by(DispoCode) %>% summarise(richness = length(unique(Genus))) #calculate genus richness
+mean(div_values$richness)
+
+#Alpha Diversity
+tdat3 <- tdat2 %>% select(Genus, DispoCode) %>% mutate(presence = 1) %>% group_by(DispoCode, Genus) %>% summarise(presence = sum(presence)) %>% pivot_wider(names_from = Genus, values_from = presence)
+tdat3[is.na(tdat3)]<-0
+tdat3<- as.data.frame(tdat3)
+rownames(tdat3)<- tdat3$DispoCode
+tdat3 <- tdat3[,-1]
+class(tdat3)
+diversity_values <- vegan::diversity(tdat3)#calculate alpha diversity values
+div_values$alpha <- diversity_values
+
+#Beta Diversity
+beta_div <- beta.div(tdat3, "hellinger", nperm=1000) #calculate beta diversity
+beta_values <- beta_div$LCBD# calculate local contributions to beta diversity
+div_values$beta <- beta_values
+
+```
+
+```{r Evolutionary Distinctiveness of Ineractions}
+#Plants
+gcbd <- data.frame(beta_div$SCBD)
+gcbd$Genus <- rownames(gcbd)
+colnames(gcbd)[1] <- "gcbd"
+
+plants <- gcbd %>% select(Genus)
+plants <- getTaxonomy(plants$Genus)
+colnames(plants) <- c("genus", "family")
+plants$species <- plants$genus
+plants$spp <- "sp"
+plants <- unite(data=plants, "species", species, spp, sep = " ")
+plants <- plants %>% select(species, genus, family)
+y <- V.PhyloMaker::phylo.maker(plants, scenarios = "S3") # default scenario
+tree_plants <- y$scenario.3
+plot(tree_plants)
+
+#EDi = EDm + EDp
+
+EDi_list <- as.list(NULL)
+DispoCode_list <- as.list(NULL)
+
+for(i in 1:100){
+#Animals 
+
+ED_plants <- evol.distinct(tree_plants, type ="equal.splits", scale = FALSE, use.branch.lengths = TRUE)
+ED_plants <- ED_plants %>% separate(Species, c("Genus", "sp"), sep = "_") %>% select(-sp) %>% rename(w_plants =w)
+ED_animals <- evol.distinct(frug_tree, type ="equal.splits", scale = FALSE, use.branch.lengths = TRUE)
+colnames(ED_animals)<- c("Animal", "w_animals")
+ED_animals$Animal[ED_animals$Animal=="Loxodonta_africana"] <- "Loxodonta_cyclotis"
+ED_animals$Animal[ED_animals$Animal=="Galagoides_demidovii"] <- "Galagoides_demidoff"
+#ED_animals$Animal[ED_animals$Animal=="Loxodonta_africana"] <- "Loxodonta_cyclotis"
+
+tdat_interaction <- tdat2 %>% select(DispoCode, Genus, Agapornis_swindernianus:Zosterops_senegalensis) %>% pivot_longer(names_to = "Animal", values_to = "InteractionProbability", cols = Agapornis_swindernianus:Zosterops_senegalensis)
+
+tdat_interaction$InteractionProbability <- rbinom(nrow(tdat_interaction), 1 , tdat_interaction$InteractionProbability) #draw from probability distribution
+tdat_interaction <- left_join(tdat_interaction, ED_plants, by = "Genus")
+tdat_interaction <- left_join(tdat_interaction, ED_animals, by = "Animal")
+  
+tdat_interaction2 <- tdat_interaction %>% filter(InteractionProbability ==1) %>% unite("Interaction", Genus:Animal, sep="_")
+
+tdat_interaction2$EDi <- tdat_interaction2$w_plants + tdat_interaction2$w_animals
+
+
+EDi_list[[i]] <- tdat_interaction2$EDi
+DispoCode_list[[i]] <- tdat_interaction2$DispoCode
+
+}
+
+
+#Evolutionary Distinctiveness of interactions
+EDi_df <- data.frame(unlist(EDi_list), unlist(DispoCode_list))
+colnames(EDi_df)<- c("EDi", "DispoCode")
+EDi_df2 <- tdat_interaction2%>%drop_na() %>% group_by(DispoCode) %>% summarise(Mean_EDi = mean(EDi))
+div_meta <- left_join(div_values, metadata_og, by = "DispoCode")
+div_meta <- left_join(div_values, metadata_og, by = "DispoCode") # add metadata
+div_meta <- div_meta[!is.na(div_meta$Elephant),] #remove plots that do not have values of elephant activity
+div_meta$Elephant[div_meta$Elephant=="Ancienne piste/pas d'activite"] <- "1"
+div_meta$Elephant[div_meta$Elephant=="Active"] <- "1"
+div_meta$Elephant[div_meta$Elephant=="Pas d'indice"] <- "0"
+div_meta$Succ2 <- factor(div_meta$Succ2, levels= c("Prm", "Sec", "Exp"))
+
+EDi_df3 <- left_join(EDi_df2, div_meta, by="DispoCode") %>% filter(!is.na(Elephant))
+
+edi_mod <- lm(data = EDi_df3, Mean_EDi ~Elephant +VillDist +Temp +Succ2+ Prec+Latitude+SoilPCA, na.action = na.fail) #build full model
+edi_mod_mod2 <- dredge(edi_mod) #select best model
+edi_mod_mod3 <- model.avg(edi_mod_mod2, cumsum(weight) <= .95)
+edi_mod_summary <- summary(edi_mod_mod3) #best model covariates
+
+edi_mod_summary <- as.data.frame(edi_mod_summary$coefmat.subset)
+
+edi_mod_summary$Lower <- edi_mod_summary$Estimate - 1.96 * edi_mod_summary$`Std. Error`
+edi_mod_summary$Upper <- edi_mod_summary$Estimate + 1.96 * edi_mod_summary$`Std. Error`
+edi_mod_summary$Lower90 <- edi_mod_summary$Estimate - 1.644854 * edi_mod_summary$`Std. Error`
+edi_mod_summary$Upper90 <- edi_mod_summary$Estimate + 1.644854 * edi_mod_summary$`Std. Error`
+
+edi_mod_summary$Variable <- rownames(edi_mod_summary)
+edi_mod_summary$Variable[edi_mod_summary$Variable=="Prec"] <- "Prec."
+edi_mod_summary$Variable[edi_mod_summary$Variable=="SoilPCA"] <- "Soil PCA"
+edi_mod_summary$Variable[edi_mod_summary$Variable=="VillDist"] <- "Vill. Dist."
+edi_mod_summary$Variable[edi_mod_summary$Variable=="Temp"] <- "Temp."
+edi_mod_summary$Variable[edi_mod_summary$Variable=="Elephant1"] <- "Ele. Act."
+edi_mod_summary$Variable[edi_mod_summary$Variable=="Latitude"] <- "Lat."
+edi_mod_summary$Variable[edi_mod_summary$Variable=="Succ2Sec"] <- "Secondary"
+edi_mod_summary$Variable[edi_mod_summary$Variable=="Succ2Exp"] <- "Logged"
+
+edi_mod_summary$VarType <- edi_mod_summary$Variable
+edi_mod_summary$VarType[edi_mod_summary$VarType=="Ele. Act."] <- "Environmental"
+edi_mod_summary$VarType[edi_mod_summary$VarType=="Lat."] <- "Environmental"
+edi_mod_summary$VarType[edi_mod_summary$VarType=="Elev."] <- "Environmental"
+edi_mod_summary$VarType[edi_mod_summary$VarType=="Temp."] <- "Environmental"
+edi_mod_summary$VarType[edi_mod_summary$VarType=="Soil PCA"] <- "Environmental"
+edi_mod_summary$VarType[edi_mod_summary$VarType=="Prec."] <- "Environmental"
+edi_mod_summary$VarType[edi_mod_summary$VarType=="Vill. Dist."] <- "Anthropogenic"
+edi_mod_summary$VarType[edi_mod_summary$VarType=="Logged"] <- "Anthropogenic"
+edi_mod_summary$VarType[edi_mod_summary$VarType=="Secondary"] <- "Anthropogenic"
+
+
+edi_mod_summary2 <- edi_mod_summary %>% filter(Variable != "(Intercept)")
+
+edi_mod_summary2$Variable <- factor(edi_mod_summary2$Variable, levels = c("Ele. Act.", "Temp.","Prec.",  "Lat.", "Soil PCA", "Vill. Dist.", "Secondary", "Logged"))
+
+edi_plot <- ggplot(data=edi_mod_summary2, aes(x= Variable, y= Estimate, ymin=Lower, ymax=Upper, color=VarType))+
+  geom_hline(yintercept = 0, linetype="dashed")+
+  geom_pointrange(aes(color=VarType),position = position_dodge(0.5), size=0.7, lwd=0.7)+
+  geom_linerange(aes(x= Variable, y= Estimate, ymin=Lower90, ymax=Upper90, color=VarType), position = position_dodge(0.5), linewidth=1.5)+
+  theme_classic()+
+  ylab("Estimated Effect on ED")+
+  theme(legend.position="bottom")+
+  scale_color_manual(values = c("gold", "darkblue"))+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))+
+    labs(color='Variable Type') 
+
+
+diversity_plot_interaction2 <- ggarrange(richness_plot_interaction, alpha_plot_interaction, beta_plot_interaction,edi_plot, labels = c("a", "b", "c", "d"), nrow=2,ncol=2, common.legend = TRUE)
+
+t.test(EDi_df3$Mean_EDi[EDi_df3$Park==1],EDi_df3$Mean_EDi[EDi_df3$Park==0], alternative = "greater")
+
+```
+
+```{r GCBD}
+#Dispersed by different animal taxa
+
+total_disp_list <- as.list(NULL)
+total_disp_list_ele <- as.list(NULL)
+total_disp_list_ape <- as.list(NULL)
+total_disp_list_monkey <- as.list(NULL)
+total_disp_list_ungulate <- as.list(NULL)
+total_disp_list_rodent <- as.list(NULL)
+total_disp_list_carnivore <- as.list(NULL)
+total_disp_list_bat <- as.list(NULL)
+total_disp_list_bird<- as.list(NULL)
+total_disp_list_bushbaby<- as.list(NULL)
+
+for(i in 1:100){
+
+tdat_interaction <- tdat2 %>% select(DispoCode, Genus, Agapornis_swindernianus:Zosterops_senegalensis) %>% pivot_longer(names_to = "Animal", values_to = "InteractionProbability", cols = Agapornis_swindernianus:Zosterops_senegalensis)
+
+tdat_interaction$InteractionProbability <- rbinom(nrow(tdat_interaction), 1 , tdat_interaction$InteractionProbability) #draw from probability distribution
+
+tdat_interaction <- left_join(tdat_interaction, animal_taxa, by="Animal")
+
+tdat_interaction2 <- tdat_interaction %>%select(Genus, Taxa, InteractionProbability) %>%filter(InteractionProbability ==1)%>%distinct() %>% pivot_wider(names_from = Taxa, values_from = InteractionProbability)
+tdat_interaction2[is.na(tdat_interaction2)] <- 0
+
+gcbd <- data.frame(beta_div$SCBD)
+gcbd$Genus <- rownames(gcbd)
+colnames(gcbd) <- c("gcbd", "Genus")
+gcbd <- left_join(gcbd, tdat_interaction2, by="Genus")
+gcbd[is.na(gcbd)]<- 0
+
+gcbd$Total <- gcbd$Elephant + gcbd$Ape + gcbd$Monkey + gcbd$Ungulate + gcbd$Rodent+ gcbd$Carnivore + gcbd$Bat +gcbd$Bird+gcbd$BushBaby 
+gcbd$Total[gcbd$Total>=1] <- 1
+
+
+total_disp_list[[i]] <- gcbd$Total
+total_disp_list_ele <- gcbd$Elephant
+total_disp_list_ape <- gcbd$Ape
+total_disp_list_monkey <- gcbd$Monkey
+total_disp_list_ungulate <- gcbd$Ungulate
+total_disp_list_rodent <- gcbd$Rodent
+total_disp_list_carnivore <- gcbd$Carnivore
+total_disp_list_bat <- gcbd$Bat
+total_disp_list_bird<-gcbd$Bird
+total_disp_list_bushbaby<- gcbd$BushBaby 
+}
+
+genus_interaction_draws <- data.frame(rep(gcbd$Genus, 5), unlist(total_disp_list), unlist(total_disp_list_ele),unlist(total_disp_list_ape),unlist(total_disp_list_monkey),unlist(total_disp_list_ungulate),unlist(total_disp_list_rodent),unlist(total_disp_list_carnivore),unlist(total_disp_list_bat),unlist(total_disp_list_bird),unlist(total_disp_list_bushbaby))
+
+genus_interaction_draws$gcbd <- gcbd$gcbd
+
+
+
+colnames(genus_interaction_draws) <- c("Genus", "Dispersed",  "Elephant", "Ape", "Monkey", "Ungulate", "Rodent", "Carnivore", "Bat", "Bird", "BushBaby", "gcbd")
+
+
+gcbd$gcbd <- log(gcbd$gcbd)
+
+gcbd$Total <- as.factor(gcbd$Total)
+
+disp_est <- summary(lm(data =  gcbd,  gcbd ~Total))
+
+my_comparisons <- list( c("0", "1") )
+
+dispersed_plot <- ggplot(data=gcbd, aes(x=as.factor(Total), y = gcbd, color=as.factor(Total)))+geom_boxplot()+theme_classic()+ 
+  xlab("Frugivore Interactions")+
+  scale_color_manual(values=c("black", "darkgreen"))+ 
+  theme(legend.position = "none")+
+  ylab("log GCBD")+
+  stat_compare_means(comparisons = my_comparisons, label = "p.signif",method = "t.test",)+
+  geom_jitter(alpha=0.2)
+
+genus_interaction_draws2 <- genus_interaction_draws %>% mutate(Dispersed = Dispersed*gcbd,
+                                                               Elephant = Elephant*gcbd,
+                                                               Ape = Ape*gcbd,
+                                                               Monkey = Monkey*gcbd,
+                                                               Ungulate = Ungulate*gcbd,
+                                                               Rodent = Rodent*gcbd,
+                                                               Carnivore = Carnivore*gcbd,
+                                                               Bat = Bat*gcbd,
+                                                               Bird = Bird*gcbd,
+                                                               BushBaby = BushBaby*gcbd)%>%
+  pivot_longer(cols = Dispersed:BushBaby, names_to = "Taxa", values_to = "GCBD") %>% 
+  group_by(Taxa, Genus) %>% summarise(GCBD = mean(GCBD)) %>% group_by(Taxa) %>% summarise(GCBD = sum(GCBD))
+  
+
+
+
+```
+
+```{r GCBD Phylo}
+tdat4 <- tdat3 %>% select(-"Carthomium")
+colnames(tdat4) <- paste(colnames(tdat4),"sp", sep="_") 
+
+#Beta Diverstiy
+phylo_dist <- cophenetic.phylo(tree_plants)
+setdiff(colnames(tdat4), rownames(phylo_dist))
+phylo_beta <- BD.extent(tdat4, phylo_dist)
+
+gcbd_phylo <- as.data.frame(phylo_beta[["SCBDextend.obs"]])
+gcbd_phylo$DispoCode <- rownames(gcbd_phylo) 
+colnames(gcbd_phylo) <- c("GCBD_phylo","Genus")
+gcbd_phylo <- gcbd_phylo %>% separate(Genus, into= c("Genus", "sp")) %>% select(-sp)
+  
+
+total_disp_list_phylo <- as.list(NULL)
+total_disp_list_ele_phylo <- as.list(NULL)
+total_disp_list_ape_phylo <- as.list(NULL)
+total_disp_list_monkey_phylo <- as.list(NULL)
+total_disp_list_ungulate_phylo <- as.list(NULL)
+total_disp_list_rodent_phylo <- as.list(NULL)
+total_disp_list_carnivore_phylo <- as.list(NULL)
+total_disp_list_bat_phylo <- as.list(NULL)
+total_disp_list_bird_phylo<- as.list(NULL)
+total_disp_list_bushbaby_phylo <- as.list(NULL)
+
+for(i in 1:100){
+
+tdat_interaction <- tdat2 %>% select(DispoCode, Genus, Agapornis_swindernianus:Zosterops_senegalensis) %>% pivot_longer(names_to = "Animal", values_to = "InteractionProbability", cols = Agapornis_swindernianus:Zosterops_senegalensis)
+
+tdat_interaction$InteractionProbability <- rbinom(nrow(tdat_interaction), 1 , tdat_interaction$InteractionProbability) #draw from probability distribution
+
+tdat_interaction <- left_join(tdat_interaction, animal_taxa, by="Animal")
+
+tdat_interaction2 <- tdat_interaction %>%select(Genus, Taxa, InteractionProbability) %>%filter(InteractionProbability ==1)%>%distinct() %>% pivot_wider(names_from = Taxa, values_from = InteractionProbability)
+tdat_interaction2[is.na(tdat_interaction2)] <- 0
+
+gcbd_phylo2 <- left_join(gcbd_phylo, tdat_interaction2, by="Genus")
+gcbd_phylo2[is.na(gcbd_phylo2)]<- 0
+
+gcbd_phylo2$Total <- gcbd_phylo2$Elephant + gcbd_phylo2$Ape + gcbd_phylo2$Monkey + gcbd_phylo2$Ungulate + gcbd_phylo2$Rodent+ gcbd_phylo2$Carnivore + gcbd_phylo2$Bat +gcbd_phylo2$Bird+gcbd_phylo2$BushBaby 
+gcbd_phylo2$Total[gcbd_phylo2$Total>=1] <- 1
+
+
+total_disp_list_phylo[[i]] <- gcbd_phylo2$Total
+total_disp_list_ele_phylo[[i]] <- gcbd_phylo2$Elephant
+total_disp_list_ape_phylo[[i]] <- gcbd_phylo2$Ape
+total_disp_list_monkey_phylo[[i]] <- gcbd_phylo2$Monkey
+total_disp_list_ungulate_phylo[[i]] <- gcbd_phylo2$Ungulate
+total_disp_list_rodent_phylo[[i]] <- gcbd_phylo2$Rodent
+total_disp_list_carnivore_phylo[[i]] <- gcbd_phylo2$Carnivore
+total_disp_list_bat_phylo[[i]] <- gcbd_phylo2$Bat
+total_disp_list_bird_phylo[[i]]<- gcbd_phylo2$Bird
+total_disp_list_bushbaby_phylo[[i]] <- gcbd_phylo2$BushBaby
+
+}
+
+
+dispersal <- unlist(total_disp_list_phylo)
+genera <- rep(gcbd_phylo$Genus, 100)
+gcbd_phylo <- rep(gcbd_phylo$GCBD_phylo, 100)
+
+length(dispersal)
+length(genera)
+length(gcbd_phylo)
+length(gcbd$genera)
+
+gcbd_phylo <- data.frame(dispersal, genera, gcbd_phylo)
+
+gcbd_phylo2 <- gcbd_phylo %>% group_by(genera) %>% summarise(gcbd_phylo = mean(gcbd_phylo), dispersal= mean(dispersal))
+gcbd_phylo2$dispersal[gcbd_phylo2$dispersal>0] <- 1 #three species 
+
+dispersed_plot_phylo <- ggplot(data=gcbd_phylo2, aes(x=as.factor(dispersal), y = log(gcbd_phylo), color=as.factor(dispersal)))+geom_boxplot()+theme_classic()+ 
+  xlab("Frugivore Interactions")+
+  scale_color_manual(values=c("black", "darkgreen"),)+ 
+  theme(legend.position = "none")+
+  ylab("log Phylogenetic GCBD") +
+  stat_compare_means(comparisons = my_comparisons, label = "p.signif",method = "t.test")+
+  geom_jitter(alpha=0.2)
+
+gcbd_plot_total <- ggarrange(dispersed_plot, dispersed_plot_phylo, labels= c("a", "b"))
+  
+gcbd_phylo2$dispersal<- as.factor(gcbd_phylo2$dispersal)
+
+t.test(log(gcbd_phylo2$gcbd_phylo[gcbd_phylo2$dispersal==1]), log(gcbd_phylo2$gcbd_phylo[gcbd_phylo2$dispersal==0]))
+
+t.test(gcbd$gcbd[gcbd$Total=="1"],gcbd$gcbd[gcbd$Total=="0"])
+
+
+gcbd3 <- gcbd2 %>% rename(Genus =genera)
+
+gcbd4 <- left_join(tdat, gcbd3, by="Genus") %>% drop_na(Genus)
+gcbd4[gcbd4$dispersal>0,]
+gcbd4[gcbd4$dispersal==1,]
+
+
+type <- c("Taxonomic", "Phylogenetic")
+mean <- c(1.172901, 0.3073245)
+lower <- c( 0.6772499,0.1278325)
+upper <- c(1.6685518,0.4868166)
+
+
+gcbd_df <- data.frame(type, mean, lower, upper)
+
+ggplot(gcbd_df, aes(x = type, y = mean)) +
+  geom_pointrange(aes(ymin = lower, ymax = upper), color = "darkgreen") +
+  labs(x = "Index", y = "Estimated Effect of Frugivory on log(GCBD)") +
+  theme_classic() +
+  geom_hline(linetype="dashed", color="grey", yintercept=0)+
+  coord_flip()
+
+```
+
+```{r Plot Summary Tree Info}
+library(forcats)
+
+abundance <- as.data.frame(tdat2 %>% group_by(Genus) %>% summarise(abundance = n())) %>% filter(abundance> 200)#calculate genus abundance
+abundance <- left_join(abundance, ED_plants, by="Genus")
+fct_reorder(abundance$Genus, desc(abundance$abundance)) 
+
+abundance_plot <- ggplot(data = abundance, aes(x = fct_reorder(Genus, abundance), y=abundance))+
+  geom_bar(stat = "identity", width=1, color="white", aes(fill= abundance))+
+  theme_classic()+
+  xlab("Genus")+
+  ylab("Abundance")+
+  coord_flip()+
+  theme(aspect.ratio = 2/1)+
+  scale_fill_continuous(low="darkseagreen2", high="darkgreen")+
+  guides(fill = guide_legend(title = "Abundance"))+
+  theme(legend.position="bottom")+
+  theme(axis.title.y = element_blank(), 
+      axis.text.y = element_blank(), 
+      axis.ticks.y = element_blank(), 
+      axis.line.y = element_blank())+
+  theme(plot.margin = unit(c(0.1,0.1,0.1,0.1), "lines"))+
+    theme(axis.text.x = element_text(angle=90, hjust=1))
+
+
+abundance_interaction <- abundance %>% left_join(tdat_interaction, by ="Genus")
+abundance_interaction$InteractionProbability <- as.factor(abundance_interaction$InteractionProbability)
+
+interaction_matrix_plot <- ggplot(abundance_interaction, aes(Animal, fct_reorder(Genus, abundance), fill= InteractionProbability)) + 
+  geom_tile(color="black")+
+  scale_fill_manual(values = c("white", "black"))+
+  theme(axis.text.x = element_text(color="black"))+
+  theme(legend.position="bottom")+
+  xlab("Frugivore Species")+
+  ylab("Tree Genus")+
+  guides(fill = guide_legend(title = "Interaction Probability"))+
+  theme(plot.margin = unit(c(0.1,0.1,0.1,0.1), "lines"))+
+    theme(text = element_text(size=7),
+           axis.text.x = element_text(angle=90, hjust=1))
+
+summary_description_plot <- ggarrange(interaction_matrix_plot, abundance_plot, ncol =2, widths = c(2,1))
+
+```
+
+
+```{r}
+
+library(sf)
+library(rnaturalearth)
+library(rnaturalearthdata)
+library(ggspatial) 
+library(ggpubr)
+
+gabon <- ne_countries(scale = "medium", country = "Gabon", returnclass = "sf")
+plots <- read.csv("~/Documents/GitHub/FaunalDegradationAGBNew/Data/model-data.csv")
+
+plots <- left_join(plots, div_meta_interaction, by ="DispoCode")
+
+plots$alpha2 <- scales::rescale(plots$alpha, to = c(0, 1))
+
+plots_sf <- st_as_sf(plots, coords = c("Longitude.x", "Latitude.x"), crs = 4326)
+
+
+
+alpha_plot <- ggplot() +
+  geom_sf(data = gabon, fill = "grey", color = "black") +
+  geom_sf(data = plots_sf, aes(size = alpha), 
+          shape = 21, fill = "cornflowerblue", color = "black", stroke = 0.7) +
+  scale_alpha(range = c(0.2, 1)) +  # Adjust alpha range if needed
+  theme_minimal() +
+  theme_void() +
+  labs(size = "alpha-Diversity") +
+  annotation_scale(location = "br", width_hint = 0.2)
+
+beta_plot <- ggplot() +
+  geom_sf(data = gabon, fill = "grey", color = "black") +
+  geom_sf(data = plots_sf, aes(size = beta), 
+          shape = 21, fill = "goldenrod", color = "black", stroke = 0.7) +
+  scale_alpha(range = c(0.2, 1)) +  # Adjust alpha range if needed
+  theme_minimal() +
+  theme_void() +
+  labs(size = "beta-Diversity\nContribution") +  # Add line break
+  annotation_scale(location = "br", width_hint = 0.2)
+
+
+ggarrange(alpha_plot, beta_plot, )
+
+```
+
+
+#look into relationship between secondary forest and village distance
+#Near villages you have a mix between secondary and primary forest species
