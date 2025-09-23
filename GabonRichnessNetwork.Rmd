@@ -1,0 +1,330 @@
+---
+title: "Diversity Calculations"
+output: html_document
+date: "2023-11-28"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r Load Packages and Data}
+#devtools::install_github("jinyizju/V.PhyloMaker")
+#devtools::install_github("GabrielNakamura/Dimensionality_package")
+#BiocManager::install("ggtree")
+library(tidyverse);library(adespatial);library(vegan);library(ggplot2);library(ggpubr);library(V.PhyloMaker);library(BIOMASS);library(picante);library(ape);library(BiocManager);library(Dimensionality);library(ggtree);library(adiv);library(MuMIn);library(ggfortify);library(scales);library(factoextra);library(GGally);library(corrplot);library(bipartite)
+
+tdat <- read.csv("~/Documents/GitHub/FaunalDegradationAGBNew/Data/tdat_frug2_diversity.csv")
+metadata <- read.csv("metadata_updated.csv")
+frug_tree <- read.tree("~/Documents/Projects/GabonAGB_NSF/frug_tree") #phylogenetic tree
+animal_taxa <- read.csv("~/Documents/GitHub/GabonDiversity/Data/animal_taxa.csv")
+frug_dat_total <- read.csv("~/Documents/Projects/GabonAGB_NSF/frug_dat_total2.csv")
+tdat$Genus[tdat$Genus=="Obletiana"] <- "Obletia"
+tdat$Genus[tdat$Genus=="Syzyguim"] <- "Syzygium"
+tdat$Genus[tdat$Genus=="Pschotria"] <- "Psychotria"
+tdat$Genus[tdat$Genus=="Terminialia"] <- "Terminalia"
+tdat$Genus[tdat$Genus=="Dacroydes"] <- "Dacryodes"
+
+tdat <- tdat %>% filter(DispoCode != "NRI_P140", DispoCode !="NRI_P171", DispoCode != "NRI_P066", DispoCode !="NRI_P092", DispoCode != "OLAM_P030", DispoCode !="NRI_P164", DispoCode !="OLAM_P027", DispoCode !="NRI_P072") #remove plots with very poor species identification
+
+tdat <- tdat %>%
+  mutate(
+    across(Agapornis_swindernianus:Zosterops_senegalensis,
+           ~ ifelse(.x >= 0.8, 1, 0))
+  )
+
+
+```
+
+```{r Metadata cleaning}
+
+metadata_soil <- metadata %>% select(T_BULK_DEN, S_BULK_DEN, T_CEC_CLAY, S_CEC_CLAY, T_CLAY, S_CLAY:S_OC)
+
+soil_pca <- princomp(metadata_soil)
+
+summary(soil_pca)
+
+ind<-get_pca_ind(soil_pca)
+
+metadata$SoilPCA <- ind$coord[,1]
+metadata$SoilPCA <- scale(metadata$SoilPCA)
+
+tdat2 <- tdat %>% filter(Genus != "Na")
+(nrow(tdat)-nrow(tdat2))/nrow(tdat) 
+
+
+metadata3 <- metadata %>% select(Temp, Prec, Latitude, SoilPCA, VillDist, NightLights, PopDensity) %>% summarise(
+  Temp = mean(Temp), Prec = mean(Prec), Latitude = mean(Latitude), SoilPCA = mean(SoilPCA), VillDist = mean(VillDist), NightLights = mean(NightLights), PopDensity = mean(PopDensity)
+)
+
+metadata <- metadata[metadata$DispoCode %in% tdat$DispoCode,]
+metadata$Elephant[metadata$Elephant=="Ancienne piste/pas d'activite"] <- "1"
+metadata$Elephant[metadata$Elephant=="Active"] <- "1"
+metadata$Elephant[metadata$Elephant=="Pas d'indice"] <- "0"
+
+metadata_og <- metadata
+
+metadata$VillDist <- scale(metadata$VillDist)
+metadata$Temp <- scale(metadata$Temp)
+metadata$Prec <- scale(metadata$Prec)
+metadata$Latitude <- scale(metadata$Latitude)
+metadata$T_OC <- scale(metadata$T_OC)
+metadata$T_CEC_CLAY <- scale(metadata$T_CEC_CLAY)
+metadata$Elev <- scale(metadata$Elev)
+metadata$NightLights <- scale(metadata$NightLights)
+metadata$PopDensity <- scale(metadata$PopDensity)
+
+metadata_test <- metadata %>% dplyr::select(VillDist, Temp, Prec, Latitude, SoilPCA, Elev, NightLights, PopDensity)
+
+cor_mat <- cor(metadata_test, use = "pairwise.complete.obs")
+
+corrplot(cor_mat, 
+         method = "color",        # color tiles
+         type = "upper",          # show only upper triangle
+         order = "hclust",        # reorder variables by hierarchical clustering
+         addCoef.col = "black",   # add correlation coefficients
+         number.cex = 0.7,        # size of numbers
+         tl.col = "black",        # text label color
+         tl.srt = 45,             # text rotation
+         col = colorRampPalette(c("darkred", "white", "darkblue"))(200), # color scale
+         diag = FALSE,            # hide the diagonal
+         cl.cex = 0.8,            # legend text size
+         mar = c(0,0,1,0))        # margins (top margin leaves space for title)
+
+write.csv(metadata, "metadata_cleaned.csv")
+
+
+```
+
+```{r}
+
+by_site <- split(tdat_interaction2, tdat_interaction2$DispoCode)
+
+make_matrix <- function(df) {
+  mat <- df %>%
+    select(Genus, Animal, InteractionProbability) %>%
+    pivot_wider(
+      names_from  = Animal,
+      values_from = InteractionProbability,
+      values_fill = list(InteractionProbability = 0),
+      values_fn   = list(InteractionProbability = sum)  # collapse duplicates
+    )
+
+  rn <- mat$Genus
+  mm <- as.matrix(mat[, setdiff(names(mat), "Genus"), drop = FALSE])
+  rownames(mm) <- rn
+  mm
+}
+
+get_connectance <- function(m) as.numeric(networklevel(m, index = "connectance"))
+
+# modularity 
+get_num_modules <- function(m) {
+  mod <- computeModules(m)
+  length(unique(moduleWeb2vec(mod)$module))
+}
+
+metrics_one_site <- function(df_site) {
+  m <- make_matrix(df_site)
+  c(
+    connectance = get_connectance(m),
+    modularity  = get_num_modules(m)
+  )
+}
+
+
+metrics_df <- do.call(rbind, lapply(by_site, metrics_one_site)) %>%
+  as.data.frame() %>%
+  tibble::rownames_to_column("DispoCode")
+
+
+get_H2 <- function(df) {
+  m <- make_matrix(df)
+  as.numeric(networklevel(m, index = "H2"))
+}
+
+H2_vector <- vapply(by_site, get_H2, numeric(1))
+
+metrics_df$H2 <- H2_vector 
+
+metadata <- metadata %>% left_join(metrics_df, by="DispoCode")
+
+```
+
+```{r Spatial Autoregressive Models}
+
+library(spatialreg)
+
+metadata2 <- metadata %>% filter(DispoCode %in% div_meta_interaction$DispoCode)
+
+metadata2$Succ2[metadata2$Succ2=="Prm"] <- "aPrm"
+
+
+coords <- cbind(div_meta_interaction$longitude, div_meta_interaction$latitude)
+nb <- knearneigh(coords, k = 4)
+nb <- knn2nb(nb)
+lw <- nb2listw(nb, style = "W")
+
+
+h2_sar <- errorTemprichness_sar <- errorsarlm(H2 ~ Elephant + VillDist + Temp + Succ2 + Prec +
+                        Latitude + SoilPCA + NightLights + PopDensity,
+                      data = metadata2,
+                      listw = lw)
+
+h2_sar_summary <- summary(h2_sar)
+
+
+connectance_sar <- errorTemprichness_sar <- errorsarlm(connectance ~ Elephant + VillDist + Temp + Succ2 + Prec + Latitude + SoilPCA + NightLights + PopDensity,
+                      data = metadata2,
+                      listw = lw)
+
+connectance_sar_summary <- summary(connectance_sar)
+
+
+modularity_sar <- errorTemprichness_sar <- errorsarlm(modularity ~ Elephant + VillDist + Temp + Succ2 + Prec + Latitude + SoilPCA + NightLights + PopDensity,
+                      data = metadata2,
+                      listw = lw)
+
+modularity_sar_summary <- summary(modularity_sar)
+
+```
+
+```{r Interaction Diversity Plots}
+
+h2_df<- as.data.frame(h2_sar_summary$Coef)
+h2_df$Variable <- rownames(h2_df)
+h2_df$Type <- "Specialization"
+
+connectance_df<- as.data.frame(connectance_sar_summary$Coef)
+connectance_df$Variable <- rownames(connectance_df)
+connectance_df$Type <- "Connectance"
+
+modularity_df<- as.data.frame(modularity_sar_summary$Coef)
+modularity_df$Variable <- rownames(modularity_df)
+modularity_df$Type <- "Modularity"
+
+network_df <- rbind(h2_df, connectance_df, modularity_df)
+
+network_df$Variable[network_df$Variable=="Elephant1"]<- "Ele. Act."
+network_df$Variable[network_df$Variable=="VillDist"]<- "Vill. Dist."
+network_df$Variable[network_df$Variable=="Elev"]<- "Elev."
+network_df$Variable[network_df$Variable=="Latitude"]<- "Lat."
+network_df$Variable[network_df$Variable=="Succ2Sec"]<- "Secondary"
+network_df$Variable[network_df$Variable=="Succ2Exp"]<- "Logged"
+network_df$Variable[network_df$Variable=="Temp"]<- "Temp."
+network_df$Variable[network_df$Variable=="Prec"]<- "Prec."
+network_df$Variable[network_df$Variable=="SoilPCA"]<- "Soil PCA"
+network_df$Variable[network_df$Variable=="SoilPCA"]<- "Soil PCA"
+network_df$Variable[network_df$Variable=="NightLights"]<- "Night Lights"
+network_df$Variable[network_df$Variable=="PopDensity"]<- "Pop. Density"
+
+network_df$Lower <- network_df$Estimate - 1.96 * network_df$`Std. Error`
+network_df$Upper <- network_df$Estimate + 1.96 * network_df$`Std. Error`
+network_df$Lower90 <- network_df$Estimate - 1.644854 * network_df$`Std. Error`
+network_df$Upper90 <- network_df$Estimate + 1.644854 * network_df$`Std. Error`
+
+network_df <- network_df %>% filter(Variable != "(Intercept)")
+
+network_df$VarType <- network_df$Variable
+network_df$VarType[network_df$VarType=="Ele. Act."] <- "Environmental"
+network_df$VarType[network_df$VarType=="Lat."] <- "Environmental"
+network_df$VarType[network_df$VarType=="Elev."] <- "Environmental"
+network_df$VarType[network_df$VarType=="Temp."] <- "Environmental"
+network_df$VarType[network_df$VarType=="Prec."] <- "Environmental"
+network_df$VarType[network_df$VarType=="Soil PCA"] <- "Environmental"
+network_df$VarType[network_df$VarType=="Vill. Dist."] <- "Anthropogenic"
+network_df$VarType[network_df$VarType=="Logged"] <- "Anthropogenic"
+network_df$VarType[network_df$VarType=="Secondary"] <- "Anthropogenic"
+network_df$VarType[network_df$VarType=="Night Lights"] <- "Anthropogenic"
+network_df$VarType[network_df$VarType=="Pop. Density"] <- "Anthropogenic"
+
+network_df$Variable <- factor(network_df$Variable, levels = c("Ele. Act.", "Temp.","Prec.", "Elev.", "Lat.", "Soil PCA", "Vill. Dist.", "Secondary", "Logged", "Night Lights", "Pop. Density"))
+
+specialization_plot_interaction <- ggplot(data=network_df[network_df$Type=="Specialization",], aes(x= Variable, y= Estimate, ymin=Lower, ymax=Upper, color=VarType))+
+  geom_hline(yintercept = 0, linetype="dashed")+
+  geom_pointrange(position = position_dodge(0.5), size=0.7, lwd=0.7)+
+  geom_linerange(aes(x= Variable, y= Estimate, ymin=Lower90, ymax=Upper90), position = position_dodge(0.5), linewidth=1.5)+
+  theme_classic()+
+  ylab("Estimated Effect on Specialization")+
+  theme(legend.position="bottom")+
+  scale_color_manual(values = c("gold", "darkblue"))+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))+
+  labs(color='Variable Type') 
+
+connectance_plot_interaction <- ggplot(data=network_df[network_df$Type=="Connectance",], aes(x= Variable, y= Estimate, ymin=Lower, ymax=Upper, color=VarType))+
+  geom_hline(yintercept = 0, linetype="dashed")+
+  geom_pointrange(position = position_dodge(0.5), size=0.7, lwd=0.7)+
+  geom_linerange(aes(x= Variable, y= Estimate, ymin=Lower90, ymax=Upper90), position = position_dodge(0.5), linewidth=1.5)+
+  theme_classic()+
+  ylab("Estimated Effect on Connectance")+
+  theme(legend.position="bottom")+
+  scale_color_manual(values = c("gold", "darkblue"))+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))+
+  labs(color='Variable Type') 
+
+modularity_plot_interaction <- ggplot(data=network_df[network_df$Type=="Modularity",], aes(x= Variable, y= Estimate, ymin=Lower, ymax=Upper, color=VarType))+
+  geom_hline(yintercept = 0, linetype="dashed")+
+  geom_pointrange(position = position_dodge(0.5), size=0.7, lwd=0.7)+
+  geom_linerange(aes(x= Variable, y= Estimate, ymin=Lower90, ymax=Upper90), position = position_dodge(0.5), linewidth=1.5)+
+  theme_classic()+
+  ylab("Estimated Effect on Modularity")+
+  theme(legend.position="bottom")+
+  scale_color_manual(values = c("gold", "darkblue"))+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))+
+  labs(color='Variable Type') 
+
+
+write.csv(network_df, "network_df8.csv")
+
+```
+```{r}
+
+network5 <- read.csv("network_df5.csv")
+network5$Threshold <- "0.5"
+network8 <- read.csv("network_df8.csv")
+network8$Threshold <- "0.8"
+
+network_combined <- rbind(network5, network8)
+
+network_combined$Variable <- factor(network_combined$Variable, levels = c("Ele. Act.", "Temp.","Prec.", "Elev.", "Lat.", "Soil PCA", "Vill. Dist.", "Secondary", "Logged", "Night Lights", "Pop. Density"))
+
+specialization_plot_interaction <- ggplot(data=network_combined[network_combined$Type=="Specialization",], aes(x= Variable, y= Estimate, ymin=Lower, ymax=Upper, color=Threshold, shape = VarType))+
+  geom_hline(yintercept = 0, linetype="dashed")+
+  geom_pointrange(position = position_dodge(0.5), size=0.7, lwd=0.7)+
+  geom_linerange(aes(x= Variable, y= Estimate, ymin=Lower90, ymax=Upper90), position = position_dodge(0.5), linewidth=1.5)+
+  theme_classic()+
+  ylab("Estimated Effect\non Specialization")+
+  theme(legend.position="bottom")+
+  scale_color_manual(values = c("black", "grey"))+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))+
+  labs(color='Threshold', shape = "Variable Type") 
+
+connectance_plot_interaction <- ggplot(data=network_combined[network_combined$Type=="Connectance",], aes(x= Variable, y= Estimate, ymin=Lower, ymax=Upper, color=Threshold, shape = VarType))+
+  geom_hline(yintercept = 0, linetype="dashed")+
+  geom_pointrange(position = position_dodge(0.5), size=0.7, lwd=0.7)+
+  geom_linerange(aes(x= Variable, y= Estimate, ymin=Lower90, ymax=Upper90), position = position_dodge(0.5), linewidth=1.5)+
+  theme_classic()+
+  ylab("Estimated Effect\non Connectance")+
+  theme(legend.position="bottom")+
+  scale_color_manual(values = c("black", "grey"))+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))+
+  labs(color='Threshold', shape = "Variable Type") 
+
+modularity_plot_interaction <- ggplot(data=network_combined[network_combined$Type=="Modularity",], aes(x= Variable, y= Estimate, ymin=Lower, ymax=Upper, color=Threshold, shape = VarType))+
+  geom_hline(yintercept = 0, linetype="dashed")+
+  geom_pointrange(position = position_dodge(0.5), size=0.7, lwd=0.7)+
+  geom_linerange(aes(x= Variable, y= Estimate, ymin=Lower90, ymax=Upper90), position = position_dodge(0.5), linewidth=1.5)+
+  theme_classic()+
+  ylab("Estimated Effect\non Modularity")+
+  theme(legend.position="bottom")+
+  scale_color_manual(values = c("black", "grey"))+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))+
+  labs(color='Threshold', shape = "Variable Type") 
+
+
+ggarrange(specialization_plot_interaction, connectance_plot_interaction, modularity_plot_interaction, labels = c("a", "b", "c"), ncol =1, common.legend = TRUE)
+
+
+```
+
+
