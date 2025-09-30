@@ -16,7 +16,7 @@ library(tidyverse);library(adespatial);library(vegan);library(ggplot2);library(g
 
 tdat <- read.csv("~/Documents/GitHub/FaunalDegradationAGBNew/Data/tdat_frug2_diversity.csv")
 metadata <- read.csv("metadata_updated.csv")
-frug_tree <- read.tree("~/Documents/Projects/GabonAGB_NSF/frug_tree") #phylogenetic tree
+frug_tree <- read.tree("~/Documents/GitHub/GabonDiversity/Data/frug_tree_diversity.tre")
 animal_taxa <- read.csv("~/Documents/GitHub/GabonDiversity/Data/animal_taxa.csv")
 frug_dat_total <- read.csv("~/Documents/Projects/GabonAGB_NSF/frug_dat_total2.csv")
 tdat$Genus[tdat$Genus=="Obletiana"] <- "Obletia"
