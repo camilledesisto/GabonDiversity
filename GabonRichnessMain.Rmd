@@ -16,7 +16,6 @@ library(tidyverse);library(adespatial);library(vegan);library(ggplot2);library(g
 
 tdat <- read.csv("~/Documents/GitHub/FaunalDegradationAGBNew/Data/tdat_frug2_diversity.csv")
 metadata <- read.csv("metadata_updated.csv")
-frug_tree <- read.tree("~/Documents/Projects/GabonAGB_NSF/frug_tree") #phylogenetic tree
 animal_taxa <- read.csv("~/Documents/GitHub/GabonDiversity/Data/animal_taxa.csv")
 frug_dat_total <- read.csv("~/Documents/Projects/GabonAGB_NSF/frug_dat_total2.csv")
 tdat$Genus[tdat$Genus=="Obletiana"] <- "Obletia"
@@ -24,10 +23,9 @@ tdat$Genus[tdat$Genus=="Syzyguim"] <- "Syzygium"
 tdat$Genus[tdat$Genus=="Pschotria"] <- "Psychotria"
 tdat$Genus[tdat$Genus=="Terminialia"] <- "Terminalia"
 tdat$Genus[tdat$Genus=="Dacroydes"] <- "Dacryodes"
+frug_tree <-  read.tree("~/Documents/GitHub/GabonDiversity/Data/frug_tree_diversity.tre")
 
 tdat <- tdat %>% filter(DispoCode != "NRI_P140", DispoCode !="NRI_P171", DispoCode != "NRI_P066", DispoCode !="NRI_P092", DispoCode != "OLAM_P030", DispoCode !="NRI_P164", DispoCode !="OLAM_P027", DispoCode !="NRI_P072") #remove plots with very poor species identification
-
-
 ```
 
 ```{r Metadata cleaning}
@@ -1147,7 +1145,6 @@ EDi_df <- data.frame(unlist(EDi_list), unlist(DispoCode_list))
 colnames(EDi_df)<- c("EDi", "DispoCode")
 EDi_df2 <- tdat_interaction2%>%drop_na() %>% group_by(DispoCode) %>% summarise(Mean_EDi = mean(EDi))
 div_meta_interaction2 <- div_meta_interaction2 %>% left_join(EDi_df2, by ="DispoCode")
-
 
 edi_sar <- errorsarlm(Mean_EDi ~ Elephant + VillDist + Temp + Succ2 + Prec +
                         Latitude + SoilPCA + NightLights + PopDensity,

@@ -16,7 +16,7 @@ library(tidyverse);library(adespatial);library(vegan);library(ggplot2);library(g
 
 tdat <- read.csv("~/Documents/GitHub/FaunalDegradationAGBNew/Data/tdat_frug2_diversity.csv")
 
-frug_tree <-  read.tree("~/Documents/GitHub/GabonDiversity/Data/frug_tree_diversity.tre")
+frug_tree <-  read.tree("~/Documents/GitHub/GabonDiversity/Data/frug_tree_diversity.tre") #phylogenetic tree
 animal_taxa <- read.csv("~/Documents/GitHub/GabonDiversity/Data/animal_taxa.csv")
 frug_dat_total <- read.csv("~/Documents/Projects/GabonAGB_NSF/frug_dat_total2.csv")
 tdat$Genus[tdat$Genus=="Obletiana"] <- "Obletia"
@@ -31,7 +31,7 @@ tdat <- tdat %>% filter(DispoCode != "NRI_P140", DispoCode !="NRI_P171", DispoCo
 tdat <- tdat %>%
   mutate(
     across(Agapornis_swindernianus:Zosterops_senegalensis,
-           ~ ifelse(.x >= 1, 1, 0))
+           ~ ifelse(.x >= 0.5, 1, 0))
   )
 
 point_dat <- metadata %>% dplyr::select(DispoCode, Longitude, Latitude)
@@ -59,9 +59,6 @@ rownames(tdat3_interaction)<- tdat3_interaction$DispoCode
 tdat3_interaction <- tdat3_interaction[,-1]
 diversity_values_interaction <- vegan::diversity(tdat3_interaction)#calculate alpha diversity values
 div_values_interaction$alpha <- diversity_values_interaction
-
-mean(div_values_interaction$alpha)
-mean(div_values_interaction$richness)
 
 #Beta Diversity
 beta_div_interaction <- beta.div(tdat3_interaction, "hellinger", nperm=1000) #calculate beta diversity
@@ -142,6 +139,17 @@ interaction_threshold <- data.frame(div_values_interaction$DispoCode, richness_t
 
 colnames(interaction_threshold) <- c("DispoCode", "richness", "alpha", "beta", "prop", "n", "ape", "bat", "bird", "bush", "carnivore", "elephant", "monkey", "rodent", "suidae", "ungulate", "ape_prop", "bat_prop", "bird_prop", "bush_prop", "carnivore_prop", "elephant_prop", "monkey_prop", "rodent_prop", "suidae_prop", "ungulate_prop")
 
+
+
+tdat_test <- tdat %>% filter(DispoCode %in% unique(interaction_threshold2$DispoCode))  %>% filter(Genus !="Na")
+
+length(unique(tdat_test$DispoCode))
+
+
+sort(unique(tdat_test$Genus))
+
+
+77189/90985
 
 ```
 
@@ -431,9 +439,10 @@ edi_plot <- ggplot(data=edi_mod_summary2, aes(x= Variable, y= Estimate, ymin=Low
 diversity_plot_interaction2 <- ggarrange(richness_plot_interaction, alpha_plot_interaction, beta_plot_interaction,edi_plot, labels = c("a", "b", "c", "d"), nrow=2,ncol=2, common.legend = TRUE)
 
 
-write.csv(edi_mod_summary2, "edi_mod_summary2_observed.csv")
-write.csv(taxonomic_div_interaction, "taxonomic_div_interaction_observed.csv")
+write.csv(edi_mod_summary2, "edi_mod_summary2_thershold.csv")
+write.csv(taxonomic_div_interaction, "taxonomic_div_interaction_threshold.csv")
 
 
 ```
+
 
